@@ -11,11 +11,13 @@ const defaultState = {
         { id: "end_2", name: "结局 B", desc: "", prob: 50 }
     ],
     nodes: [],
-    passwordHash: "",
+    passwordHash: "",       // 玩家防剧透密码
+    authorPasswordHash: "", // 作者管理密码（封印后用于解除只读编辑）
     isSealed: false
 };
 
 let isUnlocked = false;
+let isAuthorUnlocked = false;
 let activeTab = "fate";
 let editingNodeId = null;
 
@@ -38,6 +40,9 @@ function getSettings() {
     const extSettings = ctx.extensionSettings || {};
     if (!extSettings[MODULE_NAME]) {
         extSettings[MODULE_NAME] = structuredClone(defaultState);
+    }
+    if (typeof extSettings[MODULE_NAME].authorPasswordHash === "undefined") {
+        extSettings[MODULE_NAME].authorPasswordHash = "";
     }
     return extSettings[MODULE_NAME];
 }
@@ -170,7 +175,7 @@ function initUI() {
                         <span class="ps-title">PLOT STEERING</span>
                         <span id="ps-mode-badge" class="ps-badge">作者模式</span>
                     </div>
-                    <button class="ps-close-btn" id="ps-close-btn">&times;</button>
+                    <button class="ps-close-btn" id="ps-close-btn">×</button>
                 </div>
                 <div id="ps-tabs-container"></div>
                 <div class="ps-body" id="ps-body"></div>
@@ -242,18 +247,25 @@ function closeModal() {
    ========================================= */
 function renderPanelContent() {
     const s = getSettings();
+    const canEdit = !s.isSealed || isAuthorUnlocked;
     const $badge = $("#ps-mode-badge");
     const $tabs = $("#ps-tabs-container");
     const $body = $("#ps-body");
     const $footer = $("#ps-footer");
 
     if (s.isSealed) {
-        $badge.text("已封印 · 防剧透包").addClass("ps-sealed");
+        if (isAuthorUnlocked) {
+            $badge.text("已封印 · 作者已提权").addClass("ps-sealed");
+        } else {
+            $badge.text("已封印 · 防剧透包").addClass("ps-sealed");
+        }
     } else {
         $badge.text("作者编辑模式").removeClass("ps-sealed");
     }
 
-    if (s.passwordHash && !isUnlocked) {
+    const hasAnyPassword = Boolean(s.passwordHash || s.authorPasswordHash);
+
+    if (hasAnyPassword && !isUnlocked) {
         $tabs.empty();
         $body.html(`
             <div class="ps-lock-screen">
@@ -261,10 +273,10 @@ function renderPanelContent() {
                 <div style="font-size:15px;font-weight:500;">${escapeHtml(s.storyTitle)}</div>
                 <div class="ps-lock-desc">
                     当前剧情线与结局大纲已加密锁定。<br>
-                    剧情仍在后台正常推进，输入密码后可查看结局偏向与命运节点。
+                    输入玩家密码可查看走向与节点；输入作者密码可直接进入编辑模式。
                 </div>
                 <div class="ps-input-row">
-                    <input type="password" id="ps-unlock-input" class="ps-input" placeholder="输入解锁密码..." />
+                    <input type="password" id="ps-unlock-input" class="ps-input" placeholder="输入解锁密码或作者密码..." />
                     <button id="ps-unlock-btn" class="ps-btn ps-btn-primary">解锁</button>
                 </div>
                 <div id="ps-unlock-error" style="color:#ff8a8a;font-size:12px;min-height:16px;"></div>
@@ -292,7 +304,7 @@ function renderPanelContent() {
     $tabs.html(`
         <div class="ps-tabs">
             <div class="ps-tab ${activeTab === "fate" ? "ps-active" : ""}" data-tab="fate">结局走向 & 命运节点</div>
-            <div class="ps-tab ${activeTab === "edit" ? "ps-active" : ""}" data-tab="edit">${s.isSealed ? "大纲内容（只读）" : "大纲与结局编辑"}</div>
+            <div class="ps-tab ${activeTab === "edit" ? "ps-active" : ""}" data-tab="edit">${canEdit ? "大纲与结局编辑" : "大纲内容（只读）"}</div>
         </div>
     `);
 
@@ -313,12 +325,25 @@ function renderPanelContent() {
 function attemptUnlock() {
     const s = getSettings();
     const val = $("#ps-unlock-input").val();
-    if (hashPassword(val) === s.passwordHash) {
+    const hashed = hashPassword(val);
+
+    // 优先校验作者密码（输入作者密码直接获得编辑权限）
+    if (s.authorPasswordHash && hashed === s.authorPasswordHash) {
         isUnlocked = true;
+        isAuthorUnlocked = true;
         renderPanelContent();
-    } else {
-        $("#ps-unlock-error").text("密码错误，无法解锁。");
+        return;
     }
+
+    // 校验玩家防剧透密码
+    if (s.passwordHash && hashed === s.passwordHash) {
+        isUnlocked = true;
+        isAuthorUnlocked = false;
+        renderPanelContent();
+        return;
+    }
+
+    $("#ps-unlock-error").text("密码错误，无法解锁。");
 }
 
 /* =========================================
@@ -437,24 +462,41 @@ function renderFateTab($body) {
 }
 
 /* =========================================
-   标签页 2：大纲与结局编辑
+   标签页 2：大纲与结局编辑（支持作者密码提权）
    ========================================= */
 function renderEditTab($body) {
     const s = getSettings();
-    const disabledAttr = s.isSealed ? "disabled" : "";
+    const canEdit = !s.isSealed || isAuthorUnlocked;
+    const disabledAttr = canEdit ? "" : "disabled";
 
     const endingsEditorHtml = s.endings.map((e, idx) => `
         <div class="ps-ending-card">
             <div class="ps-ending-top">
                 <input type="text" class="ps-input ps-end-name" data-idx="${idx}" value="${escapeHtml(e.name)}" placeholder="结局名称（如：BE · 永夜）" ${disabledAttr} />
-                ${!s.isSealed ? `<button class="ps-btn ps-btn-danger ps-btn-sm ps-del-ending" data-idx="${idx}">删除</button>` : ""}
+                ${canEdit ? `<button class="ps-btn ps-btn-danger ps-btn-sm ps-del-ending" data-idx="${idx}">删除</button>` : ""}
             </div>
             <textarea class="ps-textarea ps-end-desc" data-idx="${idx}" placeholder="触发条件、剧情走向与终局大纲..." style="min-height:58px;" ${disabledAttr}>${escapeHtml(e.desc)}</textarea>
         </div>
     `).join("");
 
+    // 只读状态下，如果设置了作者密码，顶部显示“作者提权”入口
+    const sealedBannerHtml = !canEdit ? `
+        <div class="ps-ending-card" style="border-color:rgba(255,215,130,0.3);margin-bottom:16px;">
+            <div class="ps-hint" style="margin:0;color:rgba(255,226,165,0.9);">
+                此剧情线为作者封印包（只读模式），防止玩家误改设定。
+            </div>
+            ${s.authorPasswordHash ? `
+            <div class="ps-input-row" style="max-width:100%;margin-top:4px;">
+                <input type="password" id="ps-author-elevate-input" class="ps-input" placeholder="作者本人测试/修改？输入作者密码解除只读..." />
+                <button id="ps-author-elevate-btn" class="ps-btn ps-btn-primary">解锁编辑</button>
+            </div>
+            <div id="ps-author-elevate-err" style="color:#ff8a8a;font-size:11.5px;"></div>
+            ` : `<div class="ps-hint" style="margin:0;">（该封包导出时未设置作者管理密码，无法提权编辑）</div>`}
+        </div>
+    ` : "";
+
     $body.html(`
-        ${s.isSealed ? `<div class="ps-hint" style="margin-bottom:14px;color:rgba(255,226,165,0.85);">此剧情线为作者封印包：可查看大纲，但无法修改原始密码与作者设定，防止误操作。</div>` : ""}
+        ${sealedBannerHtml}
 
         <div class="ps-section">
             <div class="ps-section-header">
@@ -473,26 +515,50 @@ function renderEditTab($body) {
         <div class="ps-section">
             <div class="ps-section-header">
                 <span class="ps-label">结局分支设定（共 ${s.endings.length} 个）</span>
-                ${!s.isSealed ? `<button id="ps-add-ending" class="ps-btn ps-btn-sm">+ 添加结局</button>` : ""}
+                ${canEdit ? `<button id="ps-add-ending" class="ps-btn ps-btn-sm">+ 添加结局</button>` : ""}
             </div>
             <div id="ps-endings-list">${endingsEditorHtml}</div>
         </div>
 
-        ${!s.isSealed ? `
+        ${canEdit ? `
         <div class="ps-section">
             <div class="ps-section-header">
-                <span class="ps-label">防剧透密码设置（每条剧情线独立）</span>
+                <span class="ps-label">1. 玩家防剧透密码（给玩家查看结局与节点用，不可改大纲）</span>
             </div>
             <div class="ps-input-row" style="max-width:100%;">
-                <input type="password" id="ps-new-password" class="ps-input" placeholder="${s.passwordHash ? "已设置密码（输入新密码可覆盖）" : "设置解锁密码..."}" />
-                <button id="ps-set-password-btn" class="ps-btn">保存密码</button>
+                <input type="password" id="ps-new-password" class="ps-input" placeholder="${s.passwordHash ? "已设置玩家密码（输入新密码可覆盖）" : "设置玩家解锁密码..."}" />
+                <button id="ps-set-password-btn" class="ps-btn">保存玩家密码</button>
             </div>
-            <div class="ps-hint">设置密码后，点击下方「导出加密封包」发给玩家，玩家导入后将永久锁定密码，无法手滑修改。</div>
+        </div>
+
+        <div class="ps-section">
+            <div class="ps-section-header">
+                <span class="ps-label">2. 作者管理密码（仅作者本人保留，封印后也可解锁编辑）</span>
+            </div>
+            <div class="ps-input-row" style="max-width:100%;">
+                <input type="password" id="ps-new-author-password" class="ps-input" placeholder="${s.authorPasswordHash ? "已设置作者密码（输入新密码可覆盖）" : "设置作者管理密码..."}" />
+                <button id="ps-set-author-password-btn" class="ps-btn">保存作者密码</button>
+            </div>
+            <div class="ps-hint">建议两个密码设成不一样的：发给玩家“玩家密码”，自己留着“作者密码”方便随时测试和修改大纲。</div>
         </div>
         ` : ""}
     `);
 
-    if (!s.isSealed) {
+    if (!canEdit && s.authorPasswordHash) {
+        const tryElevate = () => {
+            const val = $("#ps-author-elevate-input").val();
+            if (hashPassword(val) === s.authorPasswordHash) {
+                isAuthorUnlocked = true;
+                renderPanelContent();
+            } else {
+                $("#ps-author-elevate-err").text("作者密码错误。");
+            }
+        };
+        $("#ps-author-elevate-btn").on("click", tryElevate);
+        $("#ps-author-elevate-input").on("keydown", e => { if (e.key === "Enter") tryElevate(); });
+    }
+
+    if (canEdit) {
         $("#ps-story-title").on("input", function () { s.storyTitle = $(this).val(); saveSettings(); });
         $("#ps-plotline").on("input", function () { s.plotline = $(this).val(); saveSettings(); });
 
@@ -521,10 +587,10 @@ function renderEditTab($body) {
         $("#ps-set-password-btn").on("click", function () {
             const pwd = $("#ps-new-password").val().trim();
             if (!pwd) {
-                if (confirm("密码为空将清除当前密码保护，确定吗？")) {
+                if (confirm("密码为空将清除玩家防剧透密码，确定吗？")) {
                     s.passwordHash = "";
                     saveSettings();
-                    alert("已清除密码保护。");
+                    alert("已清除玩家密码。");
                     renderPanelContent();
                 }
                 return;
@@ -532,7 +598,25 @@ function renderEditTab($body) {
             s.passwordHash = hashPassword(pwd);
             saveSettings();
             $("#ps-new-password").val("");
-            alert("密码已保存！下次刷新或点击「立即锁定」后生效。");
+            alert("玩家防剧透密码已保存！");
+            renderPanelContent();
+        });
+
+        $("#ps-set-author-password-btn").on("click", function () {
+            const pwd = $("#ps-new-author-password").val().trim();
+            if (!pwd) {
+                if (confirm("密码为空将清除作者管理密码，确定吗？")) {
+                    s.authorPasswordHash = "";
+                    saveSettings();
+                    alert("已清除作者密码。");
+                    renderPanelContent();
+                }
+                return;
+            }
+            s.authorPasswordHash = hashPassword(pwd);
+            saveSettings();
+            $("#ps-new-author-password").val("");
+            alert("作者管理密码已保存！封印导出后凭此密码可随时解除只读编辑。");
             renderPanelContent();
         });
     }
@@ -543,20 +627,22 @@ function renderEditTab($body) {
    ========================================= */
 function renderFooter($footer) {
     const s = getSettings();
+    const canEdit = !s.isSealed || isAuthorUnlocked;
+    const hasAnyPassword = Boolean(s.passwordHash || s.authorPasswordHash);
 
     $footer.html(`
         <div class="ps-footer-group">
             <button id="ps-toggle-enable" class="ps-btn ps-btn-sm">
                 ${s.enabled ? "● 掰正已开启" : "○ 掰正已暂停"}
             </button>
-            ${s.passwordHash ? `<button id="ps-lock-now" class="ps-btn ps-btn-sm">立即锁定</button>` : ""}
+            ${hasAnyPassword ? `<button id="ps-lock-now" class="ps-btn ps-btn-sm">立即锁定</button>` : ""}
         </div>
         <div class="ps-footer-group">
             <label class="ps-btn ps-btn-sm" style="cursor:pointer;">
                 导入封包
                 <input type="file" id="ps-import-file" accept=".json" style="display:none;" />
             </label>
-            ${!s.isSealed
+            ${canEdit
                 ? `<button id="ps-export-sealed" class="ps-btn ps-btn-primary ps-btn-sm">导出加密封包</button>`
                 : `<button id="ps-reset-author" class="ps-btn ps-btn-danger ps-btn-sm" title="清空当前封包并新建空白剧情线">新建空白线</button>`
             }
@@ -571,22 +657,24 @@ function renderFooter($footer) {
 
     $("#ps-lock-now").on("click", function () {
         isUnlocked = false;
+        isAuthorUnlocked = false;
         renderPanelContent();
     });
 
     $("#ps-import-file").on("change", handleImportPackage);
 
     $("#ps-export-sealed").on("click", function () {
-        if (!s.passwordHash) {
-            if (!confirm("你还没有设置密码，确定要导出无密码封包吗？")) return;
+        if (!s.passwordHash && !s.authorPasswordHash) {
+            if (!confirm("你还没有设置任何密码，确定要导出无密码封包吗？")) return;
         }
         const pkg = {
-            version: "1.0",
+            version: "1.1",
             isSealed: true,
             storyTitle: s.storyTitle,
             plotline: s.plotline,
             endings: s.endings.map(e => ({ ...e, prob: Math.round(100 / Math.max(1, s.endings.length)) })),
-            passwordHash: s.passwordHash
+            passwordHash: s.passwordHash,
+            authorPasswordHash: s.authorPasswordHash
         };
         const blob = new Blob([JSON.stringify(pkg, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
@@ -604,6 +692,7 @@ function renderFooter($footer) {
             ctx.extensionSettings[MODULE_NAME] = structuredClone(defaultState);
         }
         isUnlocked = true;
+        isAuthorUnlocked = true;
         saveSettings();
         renderPanelContent();
     });
@@ -629,10 +718,12 @@ function handleImportPackage(e) {
                     endings: pkg.endings,
                     nodes: [],
                     passwordHash: pkg.passwordHash || "",
+                    authorPasswordHash: pkg.authorPasswordHash || "",
                     isSealed: true
                 };
             }
-            isUnlocked = !pkg.passwordHash;
+            isUnlocked = !pkg.passwordHash && !pkg.authorPasswordHash;
+            isAuthorUnlocked = false;
             saveSettings();
             renderPanelContent();
             alert("剧情封包导入成功！已自动锁定防剧透。");
@@ -645,10 +736,10 @@ function handleImportPackage(e) {
 
 function escapeHtml(str) {
     return String(str || "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
+        .replace(/&/g, "&")
+        .replace(/</g, "<")
+        .replace(/>/g, ">")
+        .replace(/"/g, """);
 }
 
 /* =========================================
