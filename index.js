@@ -21,7 +21,6 @@
     let activeTab = "fate";
     let editingNodeId = null;
     let eventsBound = false;
-    let chatObserver = null;
 
     function hashPassword(str) {
         if (!str) return "";
@@ -75,48 +74,35 @@
     }
 
     /* =========================================
-       自动隐藏聊天界面中的 <plot_steer> 判定块（内置正则）
+       记住密码（本地存储）
        ========================================= */
-    function injectHideStyle() {
-        if (document.getElementById("ps-hide-tag-style")) return;
-        const style = document.createElement("style");
-        style.id = "ps-hide-tag-style";
-        style.textContent = "plot_steer { display: none !important; }";
-        (document.head || document.documentElement).appendChild(style);
+    function getAuthStorageKey(s) {
+        return "ps_remember_" + (s.passwordHash || "none") + "_" + (s.authorPasswordHash || "none");
     }
 
-    function hidePlotSteerInChat() {
-        const nodes = document.querySelectorAll(".mes_text");
-        const rawTagRegex = /<plot_steer>[\s\S]*?<\/plot_steer>/gi;
-        const escapedTagRegex = /<plot_steer>[\s\S]*?<\/plot_steer>/gi;
-
-        nodes.forEach(el => {
-            if (!el.innerHTML) return;
-            if (el.innerHTML.includes("plot_steer")) {
-                const cleaned = el.innerHTML
-                    .replace(rawTagRegex, "")
-                    .replace(escapedTagRegex, "");
-                if (cleaned !== el.innerHTML) {
-                    el.innerHTML = cleaned;
-                }
+    function restoreSavedAuth() {
+        try {
+            const s = getSettings();
+            const saved = localStorage.getItem(getAuthStorageKey(s));
+            if (saved === "author" && s.authorPasswordHash) {
+                isUnlocked = true;
+                isAuthorUnlocked = true;
+            } else if (saved === "player" && s.passwordHash) {
+                isUnlocked = true;
+                isAuthorUnlocked = false;
             }
-        });
+        } catch (e) {}
     }
 
-    function observeChatForHiding() {
-        if (chatObserver) return;
-        const chatEl = document.getElementById("chat");
-        if (!chatEl) return;
-
-        hidePlotSteerInChat();
-        chatObserver = new MutationObserver(() => {
-            hidePlotSteerInChat();
-        });
-        chatObserver.observe(chatEl, { childList: true, subtree: true });
+    function clearSavedAuth() {
+        try {
+            const s = getSettings();
+            localStorage.removeItem(getAuthStorageKey(s));
+        } catch (e) {}
     }
 
     /* =========================================
-       核心：向 AI 注入剧情大纲与结局判定指令
+       核心：向 AI 注入剧情大纲与防剧透判定指令
        ========================================= */
     function injectPlotPrompt() {
         try {
@@ -153,7 +139,7 @@
                 recentNodes || "（暂无节点）",
                 "",
                 "【强制输出格式与防剧透铁律】",
-                "在每次回复的最末尾，必须附加一个隐藏的 JSON 判定块，严格使用 <plot_steer> 和 </plot_steer> 包裹（不要放在代码块里）。",
+                "在每次回复的最末尾，必须附加一个隐藏的 JSON 判定块，严格使用 <plot_steer> 和 </plot_steer> 包裹（不要套用代码块）。",
                 "1. probs 中各结局百分比总和必须为 100。",
                 "2. summary 字段【严禁剧透】：只能客观、简明地记录「本轮当下已经发生的事实与互动」，绝对禁止提及任何尚未发生的剧情、未揭露的线索名称、预告或“即将触发XX / 接下来将XX”之类的剧透内容！",
                 "<plot_steer>",
@@ -171,7 +157,6 @@
     }
 
     function handleIncomingMessage(messageId) {
-        setTimeout(hidePlotSteerInChat, 80);
         try {
             const s = getSettings();
             if (!s.enabled) return;
@@ -219,12 +204,10 @@
     }
 
     /* =========================================
-       纯原生 DOM 挂载圆环与面板（不依赖 jQuery）
+       纯原生 DOM 挂载圆环与面板
        ========================================= */
     function initUI() {
         if (!document.body) return false;
-        injectHideStyle();
-        observeChatForHiding();
         if (document.getElementById("ps-floating-trigger")) return true;
 
         const triggerHtml = `
@@ -311,6 +294,7 @@
     }
 
     function openModal() {
+        restoreSavedAuth();
         renderPanelContent();
         const overlay = document.getElementById("ps-modal-overlay");
         if (overlay) overlay.classList.add("ps-open");
@@ -356,6 +340,10 @@
                         <input type="password" id="ps-unlock-input" class="ps-input" placeholder="输入解锁密码或作者密码..." />
                         <button id="ps-unlock-btn" class="ps-btn ps-btn-primary">解锁</button>
                     </div>
+                    <label style="display:flex;align-items:center;gap:6px;font-size:12px;opacity:0.85;cursor:pointer;margin-top:4px;user-select:none;">
+                        <input type="checkbox" id="ps-remember-pwd" checked />
+                        记住密码（下次点圆环直接进入）
+                    </label>
                     <div id="ps-unlock-error" style="color:#ff8a8a;font-size:12px;min-height:16px;"></div>
                 </div>
             `;
@@ -407,11 +395,18 @@
         const s = getSettings();
         const inputEl = document.getElementById("ps-unlock-input");
         const errEl = document.getElementById("ps-unlock-error");
+        const rememberEl = document.getElementById("ps-remember-pwd");
+        const shouldRemember = rememberEl ? rememberEl.checked : false;
         const hashed = hashPassword(inputEl ? inputEl.value : "");
 
         if (s.authorPasswordHash && hashed === s.authorPasswordHash) {
             isUnlocked = true;
             isAuthorUnlocked = true;
+            if (shouldRemember) {
+                try { localStorage.setItem(getAuthStorageKey(s), "author"); } catch (e) {}
+            } else {
+                clearSavedAuth();
+            }
             renderPanelContent();
             return;
         }
@@ -419,6 +414,11 @@
         if (s.passwordHash && hashed === s.passwordHash) {
             isUnlocked = true;
             isAuthorUnlocked = false;
+            if (shouldRemember) {
+                try { localStorage.setItem(getAuthStorageKey(s), "player"); } catch (e) {}
+            } else {
+                clearSavedAuth();
+            }
             renderPanelContent();
             return;
         }
@@ -634,6 +634,7 @@
                 const err = document.getElementById("ps-author-elevate-err");
                 if (hashPassword(input ? input.value : "") === s.authorPasswordHash) {
                     isAuthorUnlocked = true;
+                    try { localStorage.setItem(getAuthStorageKey(s), "author"); } catch (e) {}
                     renderPanelContent();
                 } else if (err) {
                     err.textContent = "作者密码错误。";
@@ -688,6 +689,7 @@
                 const pwd = inp ? inp.value.trim() : "";
                 if (!pwd) {
                     if (confirm("密码为空将清除玩家防剧透密码，确定吗？")) {
+                        clearSavedAuth();
                         s.passwordHash = "";
                         saveSettings();
                         alert("已清除玩家密码。");
@@ -695,6 +697,7 @@
                     }
                     return;
                 }
+                clearSavedAuth();
                 s.passwordHash = hashPassword(pwd);
                 saveSettings();
                 if (inp) inp.value = "";
@@ -707,6 +710,7 @@
                 const pwd = inp ? inp.value.trim() : "";
                 if (!pwd) {
                     if (confirm("密码为空将清除作者管理密码，确定吗？")) {
+                        clearSavedAuth();
                         s.authorPasswordHash = "";
                         saveSettings();
                         alert("已清除作者密码。");
@@ -714,6 +718,7 @@
                     }
                     return;
                 }
+                clearSavedAuth();
                 s.authorPasswordHash = hashPassword(pwd);
                 saveSettings();
                 if (inp) inp.value = "";
@@ -756,6 +761,7 @@
         const lockBtn = document.getElementById("ps-lock-now");
         if (lockBtn) {
             lockBtn.addEventListener("click", () => {
+                clearSavedAuth();
                 isUnlocked = false;
                 isAuthorUnlocked = false;
                 renderPanelContent();
@@ -793,6 +799,7 @@
         if (resetBtn) {
             resetBtn.addEventListener("click", () => {
                 if (!confirm("将清空当前封印包并回到空白作者模式，确定吗？")) return;
+                clearSavedAuth();
                 const ctx = getContextSafe();
                 if (ctx.extensionSettings) {
                     ctx.extensionSettings[MODULE_NAME] = JSON.parse(JSON.stringify(defaultState));
@@ -842,23 +849,21 @@
     }
 
     /* =========================================
-       可靠启动：原生监听 + 轮询补挂，确保圆环必出
+       可靠启动：原生监听 + 轮询补挂
        ========================================= */
     function bindSillyTavernEvents() {
         if (eventsBound) return;
         const ctx = getContextSafe();
         if (ctx.eventSource && ctx.event_types) {
             ctx.eventSource.on(ctx.event_types.MESSAGE_RECEIVED, handleIncomingMessage);
-            ctx.eventSource.on(ctx.event_types.CHAT_CHANGED, () => {
-                injectPlotPrompt();
-                setTimeout(hidePlotSteerInChat, 150);
-            });
+            ctx.eventSource.on(ctx.event_types.CHAT_CHANGED, injectPlotPrompt);
             eventsBound = true;
             injectPlotPrompt();
         }
     }
 
     function start() {
+        restoreSavedAuth();
         initUI();
         bindSillyTavernEvents();
     }
@@ -876,8 +881,7 @@
         retries++;
         const uiReady = initUI();
         bindSillyTavernEvents();
-        observeChatForHiding();
-        if ((uiReady && eventsBound && chatObserver) || retries >= 15) {
+        if ((uiReady && eventsBound) || retries >= 15) {
             clearInterval(timer);
         }
     }, 600);
