@@ -10,10 +10,6 @@
             { id: "end_1", name: "结局 A", desc: "", prob: 50 },
             { id: "end_2", name: "结局 B", desc: "", prob: 50 }
         ],
-        nodes: [],
-        nodeOverrides: {},
-        manualNodes: {},
-        rewindLimits: {},
         passwordHash: "",
         authorPasswordHash: "",
         isSealed: false
@@ -22,7 +18,6 @@
     let isUnlocked = false;
     let isAuthorUnlocked = false;
     let activeTab = "fate";
-    let editingNodeId = null;
     let eventsBound = false;
 
     function hashPassword(str) {
@@ -43,15 +38,6 @@
         }
     }
 
-    function getCurrentChatId() {
-        const ctx = getContextSafe();
-        if (typeof ctx.getCurrentChatId === "function") {
-            const id = ctx.getCurrentChatId();
-            if (id) return String(id);
-        }
-        return String(ctx.chatId || "default_chat");
-    }
-
     function getSettings() {
         const ctx = getContextSafe();
         const extSettings = ctx.extensionSettings || (window._psFallbackSettings = window._psFallbackSettings || {});
@@ -60,9 +46,9 @@
         }
         const s = extSettings[MODULE_NAME];
         if (typeof s.authorPasswordHash === "undefined") s.authorPasswordHash = "";
-        if (!s.nodeOverrides || typeof s.nodeOverrides !== "object") s.nodeOverrides = {};
-        if (!s.manualNodes || typeof s.manualNodes !== "object") s.manualNodes = {};
-        if (!s.rewindLimits || typeof s.rewindLimits !== "object") s.rewindLimits = {};
+        if (!Array.isArray(s.endings) || s.endings.length === 0) {
+            s.endings = JSON.parse(JSON.stringify(defaultState.endings));
+        }
         return s;
     }
 
@@ -116,100 +102,66 @@
     }
 
     /* =========================================
-       核心：按当前聊天与重说分支（Swipe）实时构建节点线
+       解析当前消息中的结局百分比
        ========================================= */
-    function parsePlotSteerFromText(text) {
+    function parseProbsFromText(text) {
         if (!text) return null;
         const regex = /<plot_steer>([\s\S]*?)<\/plot_steer>/i;
         const match = text.match(regex);
         if (!match) return null;
         try {
-            return JSON.parse(match[1].trim());
+            const data = JSON.parse(match[1].trim());
+            return data && data.probs && typeof data.probs === "object" ? data.probs : null;
         } catch (e) {
             return null;
         }
     }
 
-    function getActiveTimeline() {
+    function applyProbsToEndings(probs) {
+        if (!probs || typeof probs !== "object") return false;
         const s = getSettings();
-        const ctx = getContextSafe();
-        const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
-        const chatId = getCurrentChatId();
-        const rewindLimit = typeof s.rewindLimits[chatId] === "number" ? s.rewindLimits[chatId] : null;
-
-        const baseProb = Math.round(100 / Math.max(1, s.endings.length));
-        let currentProbs = Object.fromEntries(s.endings.map(e => [e.id, baseProb]));
-        const timeline = [];
-
-        for (let i = 0; i < chat.length; i++) {
-            const turnNum = i + 1;
-            if (rewindLimit !== null && turnNum > rewindLimit) break;
-
-            const msg = chat[i];
-            if (!msg || msg.is_user || !msg.mes) continue;
-
-            const data = parsePlotSteerFromText(msg.mes);
-            if (!data) continue;
-
-            const swipeId = typeof msg.swipe_id === "number" ? msg.swipe_id : 0;
-            const nodeKey = `${chatId}::m${i}::s${swipeId}`;
-
-            const nextProbs = { ...currentProbs };
-            if (data.probs && typeof data.probs === "object") {
-                s.endings.forEach(e => {
-                    if (typeof data.probs[e.id] === "number") {
-                        nextProbs[e.id] = Math.max(0, Math.min(100, Math.round(data.probs[e.id])));
-                    }
-                });
-            }
-            currentProbs = nextProbs;
-
-            const overrideSummary = s.nodeOverrides[nodeKey];
-            timeline.push({
-                id: nodeKey,
-                isManual: false,
-                turn: turnNum,
-                swipeIndex: swipeId + 1,
-                summary: typeof overrideSummary === "string" ? overrideSummary : (data.summary || "本轮剧情推进，结局偏向已更新。"),
-                probs: { ...currentProbs },
-                timestamp: msg.send_date ? String(msg.send_date).slice(-5) : ""
-            });
-        }
-
-        const manuals = Array.isArray(s.manualNodes[chatId]) ? s.manualNodes[chatId] : [];
-        manuals.forEach(m => {
-            if (rewindLimit !== null && m.turn > rewindLimit) return;
-            timeline.push({
-                id: m.id,
-                isManual: true,
-                turn: m.turn,
-                swipeIndex: null,
-                summary: m.summary,
-                probs: m.probs || { ...currentProbs },
-                timestamp: m.timestamp || ""
-            });
-        });
-
-        timeline.sort((a, b) => a.turn - b.turn);
-
-        if (timeline.length > 0) {
-            const lastProbs = timeline[timeline.length - 1].probs;
-            s.endings.forEach(e => {
-                if (typeof lastProbs[e.id] === "number") {
-                    e.prob = lastProbs[e.id];
+        let changed = false;
+        s.endings.forEach(e => {
+            if (typeof probs[e.id] === "number") {
+                const nextProb = Math.max(0, Math.min(100, Math.round(probs[e.id])));
+                if (e.prob !== nextProb) {
+                    e.prob = nextProb;
+                    changed = true;
                 }
-            });
-        } else {
-            s.endings.forEach(e => {
-                e.prob = baseProb;
-            });
-        }
+            }
+        });
+        return changed;
+    }
 
-        return { nodes: timeline, probs: currentProbs, chatId };
+    function syncProbsFromCurrentMessage(messageId) {
+        try {
+            const s = getSettings();
+            if (!s.enabled) return;
+
+            const ctx = getContextSafe();
+            const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+            if (!chat.length) return;
+
+            const idx = typeof messageId === "number" ? messageId : chat.length - 1;
+            const msg = chat[idx];
+            if (!msg || msg.is_user || !msg.mes) return;
+
+            const probs = parseProbsFromText(msg.mes);
+            if (probs) {
+                applyProbsToEndings(probs);
+                saveSettings();
+                const overlay = document.getElementById("ps-modal-overlay");
+                if (overlay && overlay.classList.contains("ps-open")) {
+                    renderPanelContent();
+                }
+            }
+        } catch (err) {
+            console.warn("[Plot Steering] 解析 <plot_steer> 失败:", err);
+        }
     }
 
     /* =========================================
-       核心：向 AI 注入剧情大纲与防剧透判定指令
+       核心：向 AI 注入剧情大纲与结局占比判定指令
        ========================================= */
     function injectPlotPrompt() {
         try {
@@ -224,19 +176,13 @@
                 return;
             }
 
-            const { nodes } = getActiveTimeline();
-
             const endingsText = s.endings
                 .map((e, i) => `${i + 1}. [ID:${e.id}] ${e.name}（当前偏向 ${e.prob}%）：${e.desc || "无详细描述"}`)
                 .join("\n");
 
-            const recentNodes = nodes.slice(-5)
-                .map((n, idx) => `节点${nodes.length - Math.min(5, nodes.length) + idx + 1}：${n.summary}`)
-                .join("\n");
-
             const promptText = [
-                "[系统隐藏指令：剧情大纲与结局掰正系统]",
-                "你必须在保持角色扮演自然流畅的前提下，严格遵循以下剧情大纲，并根据当前互动走向动态推进结局。如果玩家做出重大反转行为，请合理调整结局偏向，最终导向最契合的终局。",
+                "[系统隐藏指令：剧情大纲与结局占比掰正系统]",
+                "你必须在保持角色扮演自然流畅的前提下，严格遵循以下主线大纲与结局设定。请结合当前对话历史与已有记忆/设定判断当前进度：已经发生或已经完成的剧情与线索直接跳过，绝不重复触发，顺着当前进度自然往后推进；若玩家做出重大反转或改变了既有记忆事实，请根据最新事实重新评估并调整各结局偏向。",
                 "",
                 "【主线大纲】",
                 s.plotline || "（未设定）",
@@ -244,17 +190,11 @@
                 "【预设结局分支】",
                 endingsText,
                 "",
-                "【已确认的关键命运节点（若玩家修改了以下总结，请严格以修改后的事实为准）】",
-                recentNodes || "（暂无节点）",
-                "",
-                "【强制输出格式与防剧透铁律】",
-                "在每次回复的最末尾，必须附加一个隐藏的 JSON 判定块，严格使用 <plot_steer> 和 </plot_steer> 包裹（不要套用代码块）。",
-                "1. probs 中各结局百分比总和必须为 100。",
-                "2. summary 字段【严禁剧透】：只能客观、简明地记录「本轮当下已经发生的事实与互动」，绝对禁止提及任何尚未发生的剧情、未揭露的线索名称、预告或“即将触发XX / 接下来将XX”之类的剧透内容！",
+                "【强制输出格式】",
+                "在每次回复的最末尾，必须附加一个隐藏的 JSON 判定块，严格使用 <plot_steer> 和 </plot_steer> 包裹（不要套用代码块），只输出各结局百分比（总和需为 100）：",
                 "<plot_steer>",
                 "{",
-                `  "probs": { ${s.endings.map(e => `"${e.id}": ${e.prob}`).join(", ")} },`,
-                '  "summary": "仅记录本轮当下已发生的客观事实（严禁剧透后续或预告）"',
+                `  "probs": { ${s.endings.map(e => `"${e.id}": ${e.prob}`).join(", ")} }`,
                 "}",
                 "</plot_steer>"
             ].join("\n");
@@ -262,23 +202,6 @@
             ctx.setExtensionPrompt(PROMPT_KEY, promptText, promptType, 1);
         } catch (e) {
             console.warn("[Plot Steering] 注入大纲异常:", e);
-        }
-    }
-
-    function syncAndRefresh(clearRewind = false) {
-        try {
-            const s = getSettings();
-            if (clearRewind) {
-                const chatId = getCurrentChatId();
-                delete s.rewindLimits[chatId];
-            }
-            injectPlotPrompt();
-            const overlay = document.getElementById("ps-modal-overlay");
-            if (overlay && overlay.classList.contains("ps-open")) {
-                renderPanelContent();
-            }
-        } catch (e) {
-            console.warn("[Plot Steering] 同步分支异常:", e);
         }
     }
 
@@ -413,7 +336,7 @@
                     <div style="font-size:15px;font-weight:500;">${escapeHtml(s.storyTitle)}</div>
                     <div class="ps-lock-desc">
                         当前剧情线与结局大纲已加密锁定。<br>
-                        输入玩家密码可查看走向与节点；输入作者密码可直接进入编辑模式。
+                        输入玩家密码可查看结局占比；输入作者密码可直接进入编辑模式。
                     </div>
                     <div class="ps-input-row">
                         <input type="password" id="ps-unlock-input" class="ps-input" placeholder="输入解锁密码或作者密码..." />
@@ -449,7 +372,7 @@
 
         tabsEl.innerHTML = `
             <div class="ps-tabs">
-                <div class="ps-tab ${activeTab === "fate" ? "ps-active" : ""}" data-tab="fate">结局走向 & 命运节点</div>
+                <div class="ps-tab ${activeTab === "fate" ? "ps-active" : ""}" data-tab="fate">结局偏向占比</div>
                 <div class="ps-tab ${activeTab === "edit" ? "ps-active" : ""}" data-tab="edit">${canEdit ? "大纲与结局编辑" : "大纲内容（只读）"}</div>
             </div>
         `;
@@ -507,7 +430,6 @@
 
     function renderFateTab(bodyEl) {
         const s = getSettings();
-        const { nodes, chatId } = getActiveTimeline();
 
         const probsHtml = s.endings.length
             ? s.endings.map(e => `
@@ -523,111 +445,25 @@
             `).join("")
             : `<div class="ps-hint">尚未设置任何结局。</div>`;
 
-        const nodesHtml = nodes.length
-            ? [...nodes].reverse().map((node, revIdx) => {
-                const realIdx = nodes.length - 1 - revIdx;
-                const isEditing = editingNodeId === node.id;
-                const branchTag = node.isManual ? "手动" : `分支 #${node.swipeIndex}`;
-                return `
-                    <div class="ps-node-card">
-                        <div class="ps-node-header">
-                            <span>节点 #${realIdx + 1} · 第 ${node.turn} 轮 · ${branchTag}</span>
-                            <div class="ps-node-actions">
-                                ${isEditing
-                                    ? `<button class="ps-btn ps-btn-primary ps-btn-sm ps-save-node" data-id="${escapeHtml(node.id)}" data-manual="${node.isManual ? "1" : "0"}">保存</button>
-                                       <button class="ps-btn ps-btn-sm ps-cancel-node">取消</button>`
-                                    : `<button class="ps-btn ps-btn-sm ps-edit-node" data-id="${escapeHtml(node.id)}">编辑 / 改命</button>
-                                       <button class="ps-btn ps-btn-danger ps-btn-sm ps-rewind-node" data-turn="${node.turn}">倒回至此</button>`
-                                }
-                            </div>
-                        </div>
-                        ${isEditing
-                            ? `<textarea class="ps-textarea ps-node-edit-input" data-id="${escapeHtml(node.id)}">${escapeHtml(node.summary)}</textarea>`
-                            : `<div class="ps-node-text">${escapeHtml(node.summary)}</div>`
-                        }
-                    </div>
-                `;
-            }).join("")
-            : `<div class="ps-hint">暂无命运节点。开始对话后，当前分支的判定总结将自动同步显示在这里（重说切换分支会自动跟着切换）。</div>`;
-
         bodyEl.innerHTML = `
             <div class="ps-section">
                 <div class="ps-section-header">
-                    <span class="ps-label">当前分支结局偏向百分比</span>
-                    <button id="ps-add-manual-node" class="ps-btn ps-btn-sm">+ 手动记录节点</button>
+                    <span class="ps-label">当前结局偏向百分比</span>
+                    <button id="ps-reset-probs" class="ps-btn ps-btn-sm">均分重置</button>
                 </div>
                 ${probsHtml}
-            </div>
-            <div class="ps-section">
-                <div class="ps-section-header">
-                    <span class="ps-label">重大判定节点（随重说分支自动切换）</span>
+                <div class="ps-hint" style="margin-top:12px;">
+                    每轮回复将根据当前对话与已有记忆重新判定各结局占比；若玩家修改了记忆或设定，后续轮次会自动按新事实重新计算。
                 </div>
-                ${nodesHtml}
             </div>
         `;
 
-        bodyEl.querySelectorAll(".ps-edit-node").forEach(btn => {
-            btn.addEventListener("click", () => {
-                editingNodeId = btn.getAttribute("data-id");
-                renderPanelContent();
+        document.getElementById("ps-reset-probs").addEventListener("click", () => {
+            if (!s.endings.length) return;
+            const avg = Math.round(100 / s.endings.length);
+            s.endings.forEach((e, idx) => {
+                e.prob = idx === 0 ? 100 - avg * (s.endings.length - 1) : avg;
             });
-        });
-
-        bodyEl.querySelectorAll(".ps-cancel-node").forEach(btn => {
-            btn.addEventListener("click", () => {
-                editingNodeId = null;
-                renderPanelContent();
-            });
-        });
-
-        bodyEl.querySelectorAll(".ps-save-node").forEach(btn => {
-            btn.addEventListener("click", () => {
-                const id = btn.getAttribute("data-id");
-                const isManual = btn.getAttribute("data-manual") === "1";
-                const textarea = bodyEl.querySelector(".ps-node-edit-input");
-                const newText = textarea ? textarea.value.trim() : "";
-                if (newText) {
-                    if (isManual) {
-                        const list = s.manualNodes[chatId] || [];
-                        const target = list.find(m => m.id === id);
-                        if (target) target.summary = newText;
-                    } else {
-                        s.nodeOverrides[id] = newText;
-                    }
-                    saveSettings();
-                }
-                editingNodeId = null;
-                renderPanelContent();
-            });
-        });
-
-        bodyEl.querySelectorAll(".ps-rewind-node").forEach(btn => {
-            btn.addEventListener("click", () => {
-                const targetTurn = Number(btn.getAttribute("data-turn"));
-                if (!confirm(`确定要倒回至第 ${targetTurn} 轮节点吗？该轮之后的节点记忆将被屏蔽，结局百分比将恢复至该节点状态。`)) return;
-                s.rewindLimits[chatId] = targetTurn;
-                if (Array.isArray(s.manualNodes[chatId])) {
-                    s.manualNodes[chatId] = s.manualNodes[chatId].filter(m => m.turn <= targetTurn);
-                }
-                saveSettings();
-                renderPanelContent();
-            });
-        });
-
-        document.getElementById("ps-add-manual-node").addEventListener("click", () => {
-            const ctx = getContextSafe();
-            const curTurn = Array.isArray(ctx.chat) ? ctx.chat.length : 1;
-            if (!Array.isArray(s.manualNodes[chatId])) s.manualNodes[chatId] = [];
-            const newNode = {
-                id: "manual_" + Date.now(),
-                turn: curTurn,
-                summary: "【手动干预】在此输入你想要扭转的剧情事实...",
-                probs: Object.fromEntries(s.endings.map(e => [e.id, e.prob])),
-                timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-            };
-            s.manualNodes[chatId].push(newNode);
-            delete s.rewindLimits[chatId];
-            editingNodeId = newNode.id;
             saveSettings();
             renderPanelContent();
         });
@@ -671,7 +507,7 @@
         const passwordSectionHtml = canEdit ? `
             <div class="ps-section">
                 <div class="ps-section-header">
-                    <span class="ps-label">1. 玩家防剧透密码（给玩家查看结局与节点用，不可改大纲）</span>
+                    <span class="ps-label">1. 玩家防剧透密码（给玩家查看结局占比用，不可改大纲）</span>
                 </div>
                 <div class="ps-input-row" style="max-width:100%;">
                     <input type="password" id="ps-new-password" class="ps-input" placeholder="${s.passwordHash ? "已设置玩家密码（输入新密码可覆盖）" : "设置玩家解锁密码..."}" />
@@ -863,7 +699,7 @@
                     if (!confirm("你还没有设置任何密码，确定要导出无密码封包吗？")) return;
                 }
                 const pkg = {
-                    version: "1.1",
+                    version: "1.2",
                     isSealed: true,
                     storyTitle: s.storyTitle,
                     plotline: s.plotline,
@@ -916,10 +752,6 @@
                         storyTitle: pkg.storyTitle || "导入的剧情线",
                         plotline: pkg.plotline,
                         endings: pkg.endings,
-                        nodes: [],
-                        nodeOverrides: {},
-                        manualNodes: {},
-                        rewindLimits: {},
                         passwordHash: pkg.passwordHash || "",
                         authorPasswordHash: pkg.authorPasswordHash || "",
                         isSealed: true
@@ -938,18 +770,17 @@
     }
 
     /* =========================================
-       可靠启动：监听消息接收、重说切换、编辑、删除与切聊天
+       可靠启动：监听消息接收、重说切换、编辑与切聊天
        ========================================= */
     function bindSillyTavernEvents() {
         if (eventsBound) return;
         const ctx = getContextSafe();
         if (ctx.eventSource && ctx.event_types) {
             const ev = ctx.event_types;
-            if (ev.MESSAGE_RECEIVED) ctx.eventSource.on(ev.MESSAGE_RECEIVED, () => syncAndRefresh(true));
-            if (ev.MESSAGE_SWIPED) ctx.eventSource.on(ev.MESSAGE_SWIPED, () => syncAndRefresh(false));
-            if (ev.MESSAGE_EDITED) ctx.eventSource.on(ev.MESSAGE_EDITED, () => syncAndRefresh(false));
-            if (ev.MESSAGE_DELETED) ctx.eventSource.on(ev.MESSAGE_DELETED, () => syncAndRefresh(false));
-            if (ev.CHAT_CHANGED) ctx.eventSource.on(ev.CHAT_CHANGED, () => syncAndRefresh(false));
+            if (ev.MESSAGE_RECEIVED) ctx.eventSource.on(ev.MESSAGE_RECEIVED, syncProbsFromCurrentMessage);
+            if (ev.MESSAGE_SWIPED) ctx.eventSource.on(ev.MESSAGE_SWIPED, () => syncProbsFromCurrentMessage());
+            if (ev.MESSAGE_EDITED) ctx.eventSource.on(ev.MESSAGE_EDITED, () => syncProbsFromCurrentMessage());
+            if (ev.CHAT_CHANGED) ctx.eventSource.on(ev.CHAT_CHANGED, injectPlotPrompt);
             eventsBound = true;
             injectPlotPrompt();
         }
