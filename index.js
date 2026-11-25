@@ -21,6 +21,7 @@
     let activeTab = "fate";
     let editingNodeId = null;
     let eventsBound = false;
+    let chatObserver = null;
 
     function hashPassword(str) {
         if (!str) return "";
@@ -74,6 +75,47 @@
     }
 
     /* =========================================
+       自动隐藏聊天界面中的 <plot_steer> 判定块（内置正则）
+       ========================================= */
+    function injectHideStyle() {
+        if (document.getElementById("ps-hide-tag-style")) return;
+        const style = document.createElement("style");
+        style.id = "ps-hide-tag-style";
+        style.textContent = "plot_steer { display: none !important; }";
+        (document.head || document.documentElement).appendChild(style);
+    }
+
+    function hidePlotSteerInChat() {
+        const nodes = document.querySelectorAll(".mes_text");
+        const rawTagRegex = /<plot_steer>[\s\S]*?<\/plot_steer>/gi;
+        const escapedTagRegex = /<plot_steer>[\s\S]*?<\/plot_steer>/gi;
+
+        nodes.forEach(el => {
+            if (!el.innerHTML) return;
+            if (el.innerHTML.includes("plot_steer")) {
+                const cleaned = el.innerHTML
+                    .replace(rawTagRegex, "")
+                    .replace(escapedTagRegex, "");
+                if (cleaned !== el.innerHTML) {
+                    el.innerHTML = cleaned;
+                }
+            }
+        });
+    }
+
+    function observeChatForHiding() {
+        if (chatObserver) return;
+        const chatEl = document.getElementById("chat");
+        if (!chatEl) return;
+
+        hidePlotSteerInChat();
+        chatObserver = new MutationObserver(() => {
+            hidePlotSteerInChat();
+        });
+        chatObserver.observe(chatEl, { childList: true, subtree: true });
+    }
+
+    /* =========================================
        核心：向 AI 注入剧情大纲与结局判定指令
        ========================================= */
     function injectPlotPrompt() {
@@ -110,12 +152,14 @@
                 "【已确认的关键命运节点（若玩家修改了以下总结，请严格以修改后的事实为准）】",
                 recentNodes || "（暂无节点）",
                 "",
-                "【强制输出格式】",
-                "在每次回复的最后，必须附加一个隐藏的 JSON 判定块，格式如下（百分比总和需为100，summary 需简明总结本轮导致结局偏向的关键判定，供节点记录）：",
+                "【强制输出格式与防剧透铁律】",
+                "在每次回复的最末尾，必须附加一个隐藏的 JSON 判定块，严格使用 <plot_steer> 和 </plot_steer> 包裹（不要放在代码块里）。",
+                "1. probs 中各结局百分比总和必须为 100。",
+                "2. summary 字段【严禁剧透】：只能客观、简明地记录「本轮当下已经发生的事实与互动」，绝对禁止提及任何尚未发生的剧情、未揭露的线索名称、预告或“即将触发XX / 接下来将XX”之类的剧透内容！",
                 "<plot_steer>",
                 "{",
                 `  "probs": { ${s.endings.map(e => `"${e.id}": ${e.prob}`).join(", ")} },`,
-                '  "summary": "本轮关键剧情判定与结局偏向原因总结"',
+                '  "summary": "仅记录本轮当下已发生的客观事实（严禁剧透后续或预告）"',
                 "}",
                 "</plot_steer>"
             ].join("\n");
@@ -127,6 +171,7 @@
     }
 
     function handleIncomingMessage(messageId) {
+        setTimeout(hidePlotSteerInChat, 80);
         try {
             const s = getSettings();
             if (!s.enabled) return;
@@ -178,6 +223,8 @@
        ========================================= */
     function initUI() {
         if (!document.body) return false;
+        injectHideStyle();
+        observeChatForHiding();
         if (document.getElementById("ps-floating-trigger")) return true;
 
         const triggerHtml = `
@@ -802,7 +849,10 @@
         const ctx = getContextSafe();
         if (ctx.eventSource && ctx.event_types) {
             ctx.eventSource.on(ctx.event_types.MESSAGE_RECEIVED, handleIncomingMessage);
-            ctx.eventSource.on(ctx.event_types.CHAT_CHANGED, injectPlotPrompt);
+            ctx.eventSource.on(ctx.event_types.CHAT_CHANGED, () => {
+                injectPlotPrompt();
+                setTimeout(hidePlotSteerInChat, 150);
+            });
             eventsBound = true;
             injectPlotPrompt();
         }
@@ -826,7 +876,8 @@
         retries++;
         const uiReady = initUI();
         bindSillyTavernEvents();
-        if ((uiReady && eventsBound) || retries >= 15) {
+        observeChatForHiding();
+        if ((uiReady && eventsBound && chatObserver) || retries >= 15) {
             clearInterval(timer);
         }
     }, 600);
