@@ -1,7 +1,6 @@
 const MODULE_NAME = "st_plot_steering";
 const PROMPT_KEY = "st_plot_steering_prompt";
 
-// 默认数据结构
 const defaultState = {
     enabled: true,
     storyTitle: "未命名剧情线",
@@ -11,8 +10,8 @@ const defaultState = {
         { id: "end_2", name: "结局 B", desc: "", prob: 50 }
     ],
     nodes: [],
-    passwordHash: "",       // 玩家防剧透密码
-    authorPasswordHash: "", // 作者管理密码（封印后用于解除只读编辑）
+    passwordHash: "",
+    authorPasswordHash: "",
     isSealed: false
 };
 
@@ -32,14 +31,18 @@ function hashPassword(str) {
 }
 
 function getContextSafe() {
-    return window.SillyTavern ? window.SillyTavern.getContext() : {};
+    try {
+        return window.SillyTavern ? window.SillyTavern.getContext() : {};
+    } catch (e) {
+        return {};
+    }
 }
 
 function getSettings() {
     const ctx = getContextSafe();
-    const extSettings = ctx.extensionSettings || {};
+    const extSettings = ctx.extensionSettings || (window._psFallbackSettings = window._psFallbackSettings || {});
     if (!extSettings[MODULE_NAME]) {
-        extSettings[MODULE_NAME] = structuredClone(defaultState);
+        extSettings[MODULE_NAME] = JSON.parse(JSON.stringify(defaultState));
     }
     if (typeof extSettings[MODULE_NAME].authorPasswordHash === "undefined") {
         extSettings[MODULE_NAME].authorPasswordHash = "";
@@ -48,81 +51,83 @@ function getSettings() {
 }
 
 function saveSettings() {
-    const ctx = getContextSafe();
-    if (typeof ctx.saveSettingsDebounced === "function") {
-        ctx.saveSettingsDebounced();
-    }
-    injectPlotPrompt();
-}
-
-/* =========================================
-   核心：向 AI 注入剧情大纲与结局判定指令
-   ========================================= */
-function injectPlotPrompt() {
-    const ctx = getContextSafe();
-    if (typeof ctx.setExtensionPrompt !== "function") return;
-
-    const s = getSettings();
-    const promptType = ctx.extension_prompt_types ? ctx.extension_prompt_types.IN_PROMPT : 1;
-
-    if (!s.enabled || (!s.plotline.trim() && s.endings.length === 0)) {
-        ctx.setExtensionPrompt(PROMPT_KEY, "", promptType, 0);
-        return;
-    }
-
-    const endingsText = s.endings
-        .map((e, i) => `${i + 1}. [ID:${e.id}] ${e.name}（当前偏向 ${e.prob}%）：${e.desc || "无详细描述"}`)
-        .join("\n");
-
-    const recentNodes = s.nodes.slice(-5)
-        .map((n, idx) => `节点${s.nodes.length - Math.min(5, s.nodes.length) + idx + 1}：${n.summary}`)
-        .join("\n");
-
-    const promptText = `
-[系统隐藏指令：剧情大纲与结局掰正系统]
-你必须在保持角色扮演自然流畅的前提下，严格遵循以下剧情大纲，并根据当前互动走向动态推进结局。如果玩家做出重大反转行为，请合理调整结局偏向，最终导向最契合的终局。
-
-【主线大纲】
-${s.plotline || "（未设定）"}
-
-【预设结局分支】
-${endingsText}
-
-【已确认的关键命运节点（若玩家修改了以下总结，请严格以修改后的事实为准）】
-${recentNodes || "（暂无节点）"}
-
-【强制输出格式】
-在每次回复的最后，必须附加一个隐藏的 JSON 判定块，格式如下（百分比总和需为100，summary 需简明总结本轮导致结局偏向的关键判定，供节点记录）：
-<plot_steer>
-{
-  "probs": { ${s.endings.map(e => `"${e.id}": ${e.prob}`).join(", ")} },
-  "summary": "本轮关键剧情判定与结局偏向原因总结"
-}
-</plot_steer>
-`.trim();
-
-    ctx.setExtensionPrompt(PROMPT_KEY, promptText, promptType, 1);
-}
-
-/* =========================================
-   核心：解析 AI 回复中的 <plot_steer> 判定块
-   ========================================= */
-function handleIncomingMessage(messageId) {
-    const s = getSettings();
-    if (!s.enabled) return;
-
-    const ctx = getContextSafe();
-    const chat = ctx.chat;
-    if (!chat || !chat.length) return;
-
-    const msg = typeof messageId === "number" ? chat[messageId] : chat[chat.length - 1];
-    if (!msg || msg.is_user || !msg.mes) return;
-
-    const regex = /<plot_steer>([\s\S]*?)<\/plot_steer>/i;
-    const match = msg.mes.match(regex);
-    if (!match) return;
-
     try {
+        const ctx = getContextSafe();
+        if (typeof ctx.saveSettingsDebounced === "function") {
+            ctx.saveSettingsDebounced();
+        }
+        injectPlotPrompt();
+    } catch (e) {
+        console.warn("[Plot Steering] 保存设置异常:", e);
+    }
+}
+
+function injectPlotPrompt() {
+    try {
+        const ctx = getContextSafe();
+        if (typeof ctx.setExtensionPrompt !== "function") return;
+
+        const s = getSettings();
+        const promptType = ctx.extension_prompt_types ? ctx.extension_prompt_types.IN_PROMPT : 1;
+
+        if (!s.enabled || (!s.plotline.trim() && s.endings.length === 0)) {
+            ctx.setExtensionPrompt(PROMPT_KEY, "", promptType, 0);
+            return;
+        }
+
+        const endingsText = s.endings
+            .map((e, i) => `${i + 1}. [ID:${e.id}] ${e.name}（当前偏向 ${e.prob}%）：${e.desc || "无详细描述"}`)
+            .join("\n");
+
+        const recentNodes = s.nodes.slice(-5)
+            .map((n, idx) => `节点${s.nodes.length - Math.min(5, s.nodes.length) + idx + 1}：${n.summary}`)
+            .join("\n");
+
+        const promptText = [
+            "[系统隐藏指令：剧情大纲与结局掰正系统]",
+            "你必须在保持角色扮演自然流畅的前提下，严格遵循以下剧情大纲，并根据当前互动走向动态推进结局。如果玩家做出重大反转行为，请合理调整结局偏向，最终导向最契合的终局。",
+            "",
+            "【主线大纲】",
+            s.plotline || "（未设定）",
+            "",
+            "【预设结局分支】",
+            endingsText,
+            "",
+            "【已确认的关键命运节点（若玩家修改了以下总结，请严格以修改后的事实为准）】",
+            recentNodes || "（暂无节点）",
+            "",
+            "【强制输出格式】",
+            "在每次回复的最后，必须附加一个隐藏的 JSON 判定块，格式如下（百分比总和需为100，summary 需简明总结本轮导致结局偏向的关键判定，供节点记录）：",
+            "<plot_steer>",
+            "{",
+            `  "probs": { ${s.endings.map(e => `"${e.id}": ${e.prob}`).join(", ")} },`,
+            '  "summary": "本轮关键剧情判定与结局偏向原因总结"',
+            "}",
+            "</plot_steer>"
+        ].join("\n");
+
+        ctx.setExtensionPrompt(PROMPT_KEY, promptText, promptType, 1);
+    } catch (e) {
+        console.warn("[Plot Steering] 注入大纲异常:", e);
+    }
+}
+
+function handleIncomingMessage(messageId) {
+    try {
+        const s = getSettings();
+        if (!s.enabled) return;
+
+        const ctx = getContextSafe();
+        const chat = ctx.chat;
+        if (!chat || !chat.length) return;
+
+        const msg = typeof messageId === "number" ? chat[messageId] : chat[chat.length - 1];
+        if (!msg || msg.is_user || !msg.mes) return;
+
+        const regex = /<plot_steer>([\s\S]*?)<\/plot_steer>/i;
+        const match = msg.mes.match(regex);
+        if (!match) return;
+
         const data = JSON.parse(match[1].trim());
         if (data.probs && typeof data.probs === "object") {
             s.endings.forEach(e => {
@@ -153,11 +158,8 @@ function handleIncomingMessage(messageId) {
     }
 }
 
-/* =========================================
-   UI 渲染：悬浮微发光圆环 + 毛玻璃面板
-   ========================================= */
 function initUI() {
-    if ($("#ps-floating-trigger").length) return;
+    if (document.getElementById("ps-floating-trigger")) return;
 
     const triggerHtml = `
         <div id="ps-floating-trigger" title="剧情大纲掰正插件" style="z-index: 99998;">
@@ -242,9 +244,6 @@ function closeModal() {
     $("#ps-modal-overlay").removeClass("ps-open");
 }
 
-/* =========================================
-   主视图路由：锁定页 vs 解锁页
-   ========================================= */
 function renderPanelContent() {
     const s = getSettings();
     const canEdit = !s.isSealed || isAuthorUnlocked;
@@ -254,11 +253,7 @@ function renderPanelContent() {
     const $footer = $("#ps-footer");
 
     if (s.isSealed) {
-        if (isAuthorUnlocked) {
-            $badge.text("已封印 · 作者已提权").addClass("ps-sealed");
-        } else {
-            $badge.text("已封印 · 防剧透包").addClass("ps-sealed");
-        }
+        $badge.text(isAuthorUnlocked ? "已封印 · 作者已提权" : "已封印 · 防剧透包").addClass("ps-sealed");
     } else {
         $badge.text("作者编辑模式").removeClass("ps-sealed");
     }
@@ -327,7 +322,6 @@ function attemptUnlock() {
     const val = $("#ps-unlock-input").val();
     const hashed = hashPassword(val);
 
-    // 优先校验作者密码（输入作者密码直接获得编辑权限）
     if (s.authorPasswordHash && hashed === s.authorPasswordHash) {
         isUnlocked = true;
         isAuthorUnlocked = true;
@@ -335,7 +329,6 @@ function attemptUnlock() {
         return;
     }
 
-    // 校验玩家防剧透密码
     if (s.passwordHash && hashed === s.passwordHash) {
         isUnlocked = true;
         isAuthorUnlocked = false;
@@ -346,9 +339,6 @@ function attemptUnlock() {
     $("#ps-unlock-error").text("密码错误，无法解锁。");
 }
 
-/* =========================================
-   标签页 1：结局百分比 & 命运节点
-   ========================================= */
 function renderFateTab($body) {
     const s = getSettings();
 
@@ -461,9 +451,6 @@ function renderFateTab($body) {
     });
 }
 
-/* =========================================
-   标签页 2：大纲与结局编辑（支持作者密码提权）
-   ========================================= */
 function renderEditTab($body) {
     const s = getSettings();
     const canEdit = !s.isSealed || isAuthorUnlocked;
@@ -479,48 +466,27 @@ function renderEditTab($body) {
         </div>
     `).join("");
 
-    // 只读状态下，如果设置了作者密码，顶部显示“作者提权”入口
-    const sealedBannerHtml = !canEdit ? `
-        <div class="ps-ending-card" style="border-color:rgba(255,215,130,0.3);margin-bottom:16px;">
-            <div class="ps-hint" style="margin:0;color:rgba(255,226,165,0.9);">
-                此剧情线为作者封印包（只读模式），防止玩家误改设定。
-            </div>
-            ${s.authorPasswordHash ? `
-            <div class="ps-input-row" style="max-width:100%;margin-top:4px;">
-                <input type="password" id="ps-author-elevate-input" class="ps-input" placeholder="作者本人测试/修改？输入作者密码解除只读..." />
-                <button id="ps-author-elevate-btn" class="ps-btn ps-btn-primary">解锁编辑</button>
-            </div>
-            <div id="ps-author-elevate-err" style="color:#ff8a8a;font-size:11.5px;"></div>
-            ` : `<div class="ps-hint" style="margin:0;">（该封包导出时未设置作者管理密码，无法提权编辑）</div>`}
-        </div>
-    ` : "";
+    let sealedBannerHtml = "";
+    if (!canEdit) {
+        const elevateBox = s.authorPasswordHash
+            ? `<div class="ps-input-row" style="max-width:100%;margin-top:4px;">
+                   <input type="password" id="ps-author-elevate-input" class="ps-input" placeholder="作者本人测试/修改？输入作者密码解除只读..." />
+                   <button id="ps-author-elevate-btn" class="ps-btn ps-btn-primary">解锁编辑</button>
+               </div>
+               <div id="ps-author-elevate-err" style="color:#ff8a8a;font-size:11.5px;"></div>`
+            : `<div class="ps-hint" style="margin:0;">（该封包导出时未设置作者管理密码，无法提权编辑）</div>`;
 
-    $body.html(`
-        ${sealedBannerHtml}
-
-        <div class="ps-section">
-            <div class="ps-section-header">
-                <span class="ps-label">剧情线名称</span>
+        sealedBannerHtml = `
+            <div class="ps-ending-card" style="border-color:rgba(255,215,130,0.3);margin-bottom:16px;">
+                <div class="ps-hint" style="margin:0;color:rgba(255,226,165,0.9);">
+                    此剧情线为作者封印包（只读模式），防止玩家误改设定。
+                </div>
+                ${elevateBox}
             </div>
-            <input type="text" id="ps-story-title" class="ps-input" value="${escapeHtml(s.storyTitle)}" placeholder="输入剧情线名称..." ${disabledAttr} />
-        </div>
+        `;
+    }
 
-        <div class="ps-section">
-            <div class="ps-section-header">
-                <span class="ps-label">主线剧情大纲（随每次聊天发送给 AI）</span>
-            </div>
-            <textarea id="ps-plotline" class="ps-textarea" placeholder="输入核心世界观、主线脉络、关键转折点..." ${disabledAttr}>${escapeHtml(s.plotline)}</textarea>
-        </div>
-
-        <div class="ps-section">
-            <div class="ps-section-header">
-                <span class="ps-label">结局分支设定（共 ${s.endings.length} 个）</span>
-                ${canEdit ? `<button id="ps-add-ending" class="ps-btn ps-btn-sm">+ 添加结局</button>` : ""}
-            </div>
-            <div id="ps-endings-list">${endingsEditorHtml}</div>
-        </div>
-
-        ${canEdit ? `
+    const passwordSectionHtml = canEdit ? `
         <div class="ps-section">
             <div class="ps-section-header">
                 <span class="ps-label">1. 玩家防剧透密码（给玩家查看结局与节点用，不可改大纲）</span>
@@ -530,7 +496,6 @@ function renderEditTab($body) {
                 <button id="ps-set-password-btn" class="ps-btn">保存玩家密码</button>
             </div>
         </div>
-
         <div class="ps-section">
             <div class="ps-section-header">
                 <span class="ps-label">2. 作者管理密码（仅作者本人保留，封印后也可解锁编辑）</span>
@@ -541,7 +506,30 @@ function renderEditTab($body) {
             </div>
             <div class="ps-hint">建议两个密码设成不一样的：发给玩家“玩家密码”，自己留着“作者密码”方便随时测试和修改大纲。</div>
         </div>
-        ` : ""}
+    ` : "";
+
+    $body.html(`
+        ${sealedBannerHtml}
+        <div class="ps-section">
+            <div class="ps-section-header">
+                <span class="ps-label">剧情线名称</span>
+            </div>
+            <input type="text" id="ps-story-title" class="ps-input" value="${escapeHtml(s.storyTitle)}" placeholder="输入剧情线名称..." ${disabledAttr} />
+        </div>
+        <div class="ps-section">
+            <div class="ps-section-header">
+                <span class="ps-label">主线剧情大纲（随每次聊天发送给 AI）</span>
+            </div>
+            <textarea id="ps-plotline" class="ps-textarea" placeholder="输入核心世界观、主线脉络、关键转折点..." ${disabledAttr}>${escapeHtml(s.plotline)}</textarea>
+        </div>
+        <div class="ps-section">
+            <div class="ps-section-header">
+                <span class="ps-label">结局分支设定（共 ${s.endings.length} 个）</span>
+                ${canEdit ? `<button id="ps-add-ending" class="ps-btn ps-btn-sm">+ 添加结局</button>` : ""}
+            </div>
+            <div id="ps-endings-list">${endingsEditorHtml}</div>
+        </div>
+        ${passwordSectionHtml}
     `);
 
     if (!canEdit && s.authorPasswordHash) {
@@ -622,9 +610,6 @@ function renderEditTab($body) {
     }
 }
 
-/* =========================================
-   底部工具栏
-   ========================================= */
 function renderFooter($footer) {
     const s = getSettings();
     const canEdit = !s.isSealed || isAuthorUnlocked;
@@ -689,7 +674,7 @@ function renderFooter($footer) {
         if (!confirm("将清空当前封印包并回到空白作者模式，确定吗？")) return;
         const ctx = getContextSafe();
         if (ctx.extensionSettings) {
-            ctx.extensionSettings[MODULE_NAME] = structuredClone(defaultState);
+            ctx.extensionSettings[MODULE_NAME] = JSON.parse(JSON.stringify(defaultState));
         }
         isUnlocked = true;
         isAuthorUnlocked = true;
@@ -743,18 +728,29 @@ function escapeHtml(str) {
 }
 
 /* =========================================
-   插件初始化入口
+   安全初始化：先画圆环，再挂后台逻辑，带兜底检查
    ========================================= */
-jQuery(async () => {
-    getSettings();
-    initUI();
-    injectPlotPrompt();
-
-    const ctx = getContextSafe();
-    if (ctx.eventSource && ctx.event_types) {
-        ctx.eventSource.on(ctx.event_types.MESSAGE_RECEIVED, handleIncomingMessage);
-        ctx.eventSource.on(ctx.event_types.CHAT_CHANGED, () => {
-            injectPlotPrompt();
-        });
+function bootPlugin() {
+    try {
+        initUI();
+    } catch (e) {
+        console.error("[Plot Steering] UI 初始化失败:", e);
     }
+
+    try {
+        getSettings();
+        injectPlotPrompt();
+        const ctx = getContextSafe();
+        if (ctx.eventSource && ctx.event_types) {
+            ctx.eventSource.on(ctx.event_types.MESSAGE_RECEIVED, handleIncomingMessage);
+            ctx.eventSource.on(ctx.event_types.CHAT_CHANGED, injectPlotPrompt);
+        }
+    } catch (e) {
+        console.warn("[Plot Steering] 后台初始化异常:", e);
+    }
+}
+
+jQuery(() => {
+    bootPlugin();
+    setTimeout(initUI, 1500);
 });
