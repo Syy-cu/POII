@@ -1,12 +1,3 @@
-import { extension_settings } from "../../../extensions.js";
-import {
-    saveSettingsDebounced,
-    eventSource,
-    event_types,
-    setExtensionPrompt,
-    extension_prompt_types
-} from "../../../../script.js";
-
 const MODULE_NAME = "st_plot_steering";
 const PROMPT_KEY = "st_plot_steering_prompt";
 
@@ -19,17 +10,15 @@ const defaultState = {
         { id: "end_1", name: "结局 A", desc: "", prob: 50 },
         { id: "end_2", name: "结局 B", desc: "", prob: 50 }
     ],
-    nodes: [], // { id, turn, summary, probs: { end_1: 60, end_2: 40 }, timestamp }
-    passwordHash: "", // 空字符串表示未设密码
-    isSealed: false   // true = 导入的作者封包，永久锁定密码修改权
+    nodes: [],
+    passwordHash: "",
+    isSealed: false
 };
 
-// 运行时会话状态（刷新页面后自动重新锁定，防剧透）
 let isUnlocked = false;
-let activeTab = "fate"; // "fate" | "edit"
+let activeTab = "fate";
 let editingNodeId = null;
 
-// 轻量级本地哈希（兼容 http 局域网环境，不依赖 crypto.subtle）
 function hashPassword(str) {
     if (!str) return "";
     let hash = 5381;
@@ -40,15 +29,24 @@ function hashPassword(str) {
     return "ps_" + Math.abs(hash).toString(36) + "_" + str.length;
 }
 
+function getContextSafe() {
+    return window.SillyTavern ? window.SillyTavern.getContext() : {};
+}
+
 function getSettings() {
-    if (!extension_settings[MODULE_NAME]) {
-        extension_settings[MODULE_NAME] = structuredClone(defaultState);
+    const ctx = getContextSafe();
+    const extSettings = ctx.extensionSettings || {};
+    if (!extSettings[MODULE_NAME]) {
+        extSettings[MODULE_NAME] = structuredClone(defaultState);
     }
-    return extension_settings[MODULE_NAME];
+    return extSettings[MODULE_NAME];
 }
 
 function saveSettings() {
-    saveSettingsDebounced();
+    const ctx = getContextSafe();
+    if (typeof ctx.saveSettingsDebounced === "function") {
+        ctx.saveSettingsDebounced();
+    }
     injectPlotPrompt();
 }
 
@@ -56,9 +54,14 @@ function saveSettings() {
    核心：向 AI 注入剧情大纲与结局判定指令
    ========================================= */
 function injectPlotPrompt() {
+    const ctx = getContextSafe();
+    if (typeof ctx.setExtensionPrompt !== "function") return;
+
     const s = getSettings();
+    const promptType = ctx.extension_prompt_types ? ctx.extension_prompt_types.IN_PROMPT : 1;
+
     if (!s.enabled || (!s.plotline.trim() && s.endings.length === 0)) {
-        setExtensionPrompt(PROMPT_KEY, "", extension_prompt_types.IN_PROMPT, 0);
+        ctx.setExtensionPrompt(PROMPT_KEY, "", promptType, 0);
         return;
     }
 
@@ -93,7 +96,7 @@ ${recentNodes || "（暂无节点）"}
 </plot_steer>
 `.trim();
 
-    setExtensionPrompt(PROMPT_KEY, promptText, extension_prompt_types.IN_PROMPT, 1);
+    ctx.setExtensionPrompt(PROMPT_KEY, promptText, promptType, 1);
 }
 
 /* =========================================
@@ -103,8 +106,8 @@ function handleIncomingMessage(messageId) {
     const s = getSettings();
     if (!s.enabled) return;
 
-    const context = SillyTavern.getContext();
-    const chat = context.chat;
+    const ctx = getContextSafe();
+    const chat = ctx.chat;
     if (!chat || !chat.length) return;
 
     const msg = typeof messageId === "number" ? chat[messageId] : chat[chat.length - 1];
@@ -132,7 +135,6 @@ function handleIncomingMessage(messageId) {
             timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
         };
 
-        // 避免同一消息重复记录
         const exists = s.nodes.some(n => n.turn === newNode.turn && n.summary === newNode.summary);
         if (!exists) {
             s.nodes.push(newNode);
@@ -152,25 +154,23 @@ function handleIncomingMessage(messageId) {
 function initUI() {
     if ($("#ps-floating-trigger").length) return;
 
-    // 1. 悬浮触发器
     const triggerHtml = `
-        <div id="ps-floating-trigger" title="剧情大纲掰正插件">
+        <div id="ps-floating-trigger" title="剧情大纲掰正插件" style="z-index: 99998;">
             <div class="ps-glow-ring"></div>
             <div class="ps-pinned-rect"></div>
         </div>
     `;
     $("body").append(triggerHtml);
 
-    // 2. 毛玻璃弹窗容器
     const modalHtml = `
-        <div id="ps-modal-overlay">
+        <div id="ps-modal-overlay" style="z-index: 99999;">
             <div id="ps-panel">
                 <div class="ps-header">
                     <div class="ps-title-wrap">
                         <span class="ps-title">PLOT STEERING</span>
                         <span id="ps-mode-badge" class="ps-badge">作者模式</span>
                     </div>
-                    <button class="ps-close-btn" id="ps-close-btn">×</button>
+                    <button class="ps-close-btn" id="ps-close-btn">&times;</button>
                 </div>
                 <div id="ps-tabs-container"></div>
                 <div class="ps-body" id="ps-body"></div>
@@ -180,7 +180,6 @@ function initUI() {
     `;
     $("body").append(modalHtml);
 
-    // 绑定拖拽与点击（区分拖拽和点击）
     makeDraggable($("#ps-floating-trigger"), () => {
         openModal();
     });
@@ -254,7 +253,6 @@ function renderPanelContent() {
         $badge.text("作者编辑模式").removeClass("ps-sealed");
     }
 
-    // 如果设置了密码且当前未解锁 -> 显示锁定界面
     if (s.passwordHash && !isUnlocked) {
         $tabs.empty();
         $body.html(`
@@ -291,7 +289,6 @@ function renderPanelContent() {
         return;
     }
 
-    // 已解锁或未设密码 -> 显示双标签页
     $tabs.html(`
         <div class="ps-tabs">
             <div class="ps-tab ${activeTab === "fate" ? "ps-active" : ""}" data-tab="fate">结局走向 & 命运节点</div>
@@ -325,7 +322,7 @@ function attemptUnlock() {
 }
 
 /* =========================================
-   标签页 1：结局百分比 & 命运节点（支持逆天改命）
+   标签页 1：结局百分比 & 命运节点
    ========================================= */
 function renderFateTab($body) {
     const s = getSettings();
@@ -386,7 +383,6 @@ function renderFateTab($body) {
         </div>
     `);
 
-    // 绑定节点编辑事件
     $(".ps-edit-node").on("click", function () {
         editingNodeId = $(this).data("id");
         renderPanelContent();
@@ -409,7 +405,6 @@ function renderFateTab($body) {
         renderPanelContent();
     });
 
-    // 倒回至此节点（清除该节点之后的所有节点，并恢复当时的百分比）
     $(".ps-rewind-node").on("click", function () {
         const idx = Number($(this).data("idx"));
         if (!confirm(`确定要倒回至节点 #${idx + 1} 吗？该节点之后的走向记录将被清除，结局百分比将恢复至该节点状态。`)) return;
@@ -426,7 +421,6 @@ function renderFateTab($body) {
         renderPanelContent();
     });
 
-    // 手动添加节点（方便玩家直接写一条“逆天改命”指令注入）
     $("#ps-add-manual-node").on("click", function () {
         const newNode = {
             id: "node_" + Date.now(),
@@ -443,7 +437,7 @@ function renderFateTab($body) {
 }
 
 /* =========================================
-   标签页 2：大纲与结局编辑（封印模式下防误改密码）
+   标签页 2：大纲与结局编辑
    ========================================= */
 function renderEditTab($body) {
     const s = getSettings();
@@ -545,7 +539,7 @@ function renderEditTab($body) {
 }
 
 /* =========================================
-   底部工具栏：导出封印包 / 导入 / 锁定 / 开关
+   底部工具栏
    ========================================= */
 function renderFooter($footer) {
     const s = getSettings();
@@ -588,7 +582,7 @@ function renderFooter($footer) {
         }
         const pkg = {
             version: "1.0",
-            isSealed: true, // 导入后永久进入封印模式
+            isSealed: true,
             storyTitle: s.storyTitle,
             plotline: s.plotline,
             endings: s.endings.map(e => ({ ...e, prob: Math.round(100 / Math.max(1, s.endings.length)) })),
@@ -605,7 +599,10 @@ function renderFooter($footer) {
 
     $("#ps-reset-author").on("click", function () {
         if (!confirm("将清空当前封印包并回到空白作者模式，确定吗？")) return;
-        extension_settings[MODULE_NAME] = structuredClone(defaultState);
+        const ctx = getContextSafe();
+        if (ctx.extensionSettings) {
+            ctx.extensionSettings[MODULE_NAME] = structuredClone(defaultState);
+        }
         isUnlocked = true;
         saveSettings();
         renderPanelContent();
@@ -623,16 +620,19 @@ function handleImportPackage(e) {
                 alert("无效的剧情封包文件。");
                 return;
             }
-            extension_settings[MODULE_NAME] = {
-                enabled: true,
-                storyTitle: pkg.storyTitle || "导入的剧情线",
-                plotline: pkg.plotline,
-                endings: pkg.endings,
-                nodes: [],
-                passwordHash: pkg.passwordHash || "",
-                isSealed: true // 导入即永久锁定编辑与改密权限
-            };
-            isUnlocked = !pkg.passwordHash; // 有密码则默认锁定
+            const ctx = getContextSafe();
+            if (ctx.extensionSettings) {
+                ctx.extensionSettings[MODULE_NAME] = {
+                    enabled: true,
+                    storyTitle: pkg.storyTitle || "导入的剧情线",
+                    plotline: pkg.plotline,
+                    endings: pkg.endings,
+                    nodes: [],
+                    passwordHash: pkg.passwordHash || "",
+                    isSealed: true
+                };
+            }
+            isUnlocked = !pkg.passwordHash;
             saveSettings();
             renderPanelContent();
             alert("剧情封包导入成功！已自动锁定防剧透。");
@@ -645,10 +645,10 @@ function handleImportPackage(e) {
 
 function escapeHtml(str) {
     return String(str || "")
-        .replace(/&/g, "&")
-        .replace(/</g, "<")
-        .replace(/>/g, ">")
-        .replace(/"/g, """);
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
 }
 
 /* =========================================
@@ -659,8 +659,11 @@ jQuery(async () => {
     initUI();
     injectPlotPrompt();
 
-    eventSource.on(event_types.MESSAGE_RECEIVED, handleIncomingMessage);
-    eventSource.on(event_types.CHAT_CHANGED, () => {
-        injectPlotPrompt();
-    });
+    const ctx = getContextSafe();
+    if (ctx.eventSource && ctx.event_types) {
+        ctx.eventSource.on(ctx.event_types.MESSAGE_RECEIVED, handleIncomingMessage);
+        ctx.eventSource.on(ctx.event_types.CHAT_CHANGED, () => {
+            injectPlotPrompt();
+        });
+    }
 });
