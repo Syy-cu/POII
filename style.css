@@ -164,6 +164,106 @@ body.ps-modal-active .ps-glow-ring {
     background: rgba(255, 255, 255, 0.18);
 }
 
+/* =========================================
+   封包存档切换栏与下拉列表
+   ========================================= */
+.ps-pkg-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 18px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
+}
+
+.ps-pkg-current {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    flex: 1;
+    font-size: 12.5px;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.ps-pkg-current-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+}
+
+.ps-pkg-drawer {
+    background: rgba(10, 11, 15, 0.92);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    padding: 10px 18px 12px 18px;
+    max-height: 220px;
+    overflow-y: auto;
+    flex-shrink: 0;
+    -webkit-overflow-scrolling: touch;
+}
+
+.ps-pkg-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.ps-pkg-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.ps-pkg-item:hover {
+    background: rgba(255, 255, 255, 0.09);
+}
+
+.ps-pkg-item.ps-pkg-active {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.35);
+}
+
+.ps-pkg-item-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+}
+
+.ps-pkg-item-title {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: #ffffff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ps-pkg-item-meta {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.ps-pkg-drawer-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
 /* 标签页切换 */
 .ps-tabs {
     display: flex;
@@ -175,13 +275,12 @@ body.ps-modal-active .ps-glow-ring {
 .ps-tab {
     flex: 1;
     text-align: center;
-    padding: 11px 6px;
-    font-size: 12.5px;
+    padding: 11px 8px;
+    font-size: 13px;
     color: rgba(255, 255, 255, 0.6);
     cursor: pointer;
     border-bottom: 2px solid transparent;
     transition: all 0.2s;
-    white-space: nowrap;
 }
 
 .ps-tab.ps-active {
@@ -236,9 +335,21 @@ body.ps-modal-active .ps-glow-ring {
 .ps-prob-head {
     display: flex;
     justify-content: space-between;
+    align-items: center;
+    gap: 8px;
     font-size: 13px;
     margin-bottom: 5px;
     color: #f4f4f8;
+}
+
+.ps-lead-tag {
+    font-size: 10.5px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(16, 185, 129, 0.22);
+    color: #a7f3d0;
+    border: 1px solid rgba(110, 231, 183, 0.4);
+    margin-left: 6px;
 }
 
 .ps-prob-bar-bg {
@@ -254,52 +365,6 @@ body.ps-modal-active .ps-glow-ring {
     background: linear-gradient(90deg, rgba(255, 255, 255, 0.65), #ffffff);
     border-radius: 999px;
     transition: width 0.35s ease;
-}
-
-/* 封包列表卡片 */
-.ps-pkg-card {
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 10px;
-    padding: 10px 12px;
-    margin-bottom: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-}
-
-.ps-pkg-card.ps-pkg-active {
-    background: rgba(255, 255, 255, 0.09);
-    border-color: rgba(255, 255, 255, 0.45);
-}
-
-.ps-pkg-info {
-    min-width: 0;
-    flex: 1;
-}
-
-.ps-pkg-title {
-    font-size: 13.5px;
-    font-weight: 500;
-    color: #ffffff;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-}
-
-.ps-pkg-meta {
-    font-size: 11.5px;
-    color: rgba(255, 255, 255, 0.55);
-    margin-top: 4px;
-}
-
-.ps-pkg-actions {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
 }
 
 /* 输入框与卡片 */
@@ -402,7 +467,7 @@ body.ps-modal-active .ps-glow-ring {
     align-items: center;
     justify-content: center;
     text-align: center;
-    padding: 20px 10px;
+    padding: 24px 10px;
     gap: 12px;
 }
 
@@ -478,6 +543,15 @@ body.ps-modal-active .ps-glow-ring {
         padding: 11px 14px;
     }
 
+    .ps-pkg-bar {
+        padding: 8px 14px;
+    }
+
+    .ps-pkg-drawer {
+        padding: 8px 14px 10px 14px;
+        max-height: 185px;
+    }
+
     .ps-body {
         padding: 12px 14px;
     }
@@ -494,15 +568,5 @@ body.ps-modal-active .ps-glow-ring {
     .ps-btn-sm {
         padding: 6px 9px;
         font-size: 11.5px;
-    }
-
-    .ps-pkg-card {
-        flex-direction: column;
-        align-items: flex-start;
-    }
-
-    .ps-pkg-actions {
-        width: 100%;
-        justify-content: flex-end;
     }
 }
