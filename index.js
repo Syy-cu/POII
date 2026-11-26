@@ -263,10 +263,15 @@
         return true;
     }
 
+    /* =========================================
+       0 延迟丝滑跟手拖拽（GPU translate3d 硬件加速）
+       ========================================= */
     function makeDraggable(el, onClick) {
         let isDragging = false;
         let moved = false;
-        let startX = 0, startY = 0, origRight = 28, origTop = 120;
+        let startX = 0, startY = 0;
+        let baseTop = 120, baseRight = 28;
+        let curDx = 0, curDy = 0;
         let lastTouchTime = 0;
 
         const onStart = (e) => {
@@ -275,14 +280,16 @@
 
             isDragging = true;
             moved = false;
-            el.classList.add("ps-dragging");
+            curDx = 0;
+            curDy = 0;
 
             const point = e.touches ? e.touches[0] : e;
             startX = point.clientX;
             startY = point.clientY;
+
             const rect = el.getBoundingClientRect();
-            origTop = rect.top;
-            origRight = window.innerWidth - rect.right;
+            baseTop = rect.top;
+            baseRight = window.innerWidth - rect.right;
         };
 
         const onMove = (e) => {
@@ -290,13 +297,26 @@
             if (document.body.classList.contains("ps-modal-active")) return;
 
             const point = e.touches ? e.touches[0] : e;
-            const dx = point.clientX - startX;
-            const dy = point.clientY - startY;
-            if (Math.abs(dx) > 5 || Math.abs(dy) > 5) moved = true;
+            const rawDx = point.clientX - startX;
+            const rawDy = point.clientY - startY;
+
+            if (!moved && (Math.abs(rawDx) > 5 || Math.abs(rawDy) > 5)) {
+                moved = true;
+                el.classList.add("ps-dragging");
+            }
+
             if (moved) {
                 if (e.cancelable) e.preventDefault();
-                el.style.top = Math.max(10, Math.min(window.innerHeight - 60, origTop + dy)) + "px";
-                el.style.right = Math.max(10, Math.min(window.innerWidth - 60, origRight - dx)) + "px";
+                const w = el.offsetWidth || 48;
+                const h = el.offsetHeight || 48;
+                const minDx = -(window.innerWidth - baseRight - w - 8);
+                const maxDx = baseRight - 8;
+                const minDy = -(baseTop - 8);
+                const maxDy = window.innerHeight - baseTop - h - 8;
+
+                curDx = Math.max(minDx, Math.min(maxDx, rawDx));
+                curDy = Math.max(minDy, Math.min(maxDy, rawDy));
+                el.style.transform = `translate3d(${curDx}px, ${curDy}px, 0)`;
             }
         };
 
@@ -304,10 +324,19 @@
             if (e.type === "mouseup" && Date.now() - lastTouchTime < 500) return;
             if (e.type === "touchend") lastTouchTime = Date.now();
 
-            if (isDragging) {
-                isDragging = false;
+            if (!isDragging) return;
+            isDragging = false;
+
+            if (moved) {
+                el.style.top = (baseTop + curDy) + "px";
+                el.style.right = (baseRight - curDx) + "px";
+                el.style.transform = "";
+                requestAnimationFrame(() => {
+                    el.classList.remove("ps-dragging");
+                });
+            } else {
                 el.classList.remove("ps-dragging");
-                if (!moved && onClick) {
+                if (onClick) {
                     if (e.cancelable) e.preventDefault();
                     onClick();
                 }
@@ -316,10 +345,10 @@
 
         el.addEventListener("mousedown", onStart);
         el.addEventListener("touchstart", onStart, { passive: true });
-        document.addEventListener("mousemove", onMove);
-        document.addEventListener("touchmove", onMove, { passive: false });
-        document.addEventListener("mouseup", onEnd);
-        document.addEventListener("touchend", onEnd, { passive: false });
+        window.addEventListener("mousemove", onMove, { passive: false });
+        window.addEventListener("touchmove", onMove, { passive: false });
+        window.addEventListener("mouseup", onEnd);
+        window.addEventListener("touchend", onEnd, { passive: false });
     }
 
     function toggleModal() {
