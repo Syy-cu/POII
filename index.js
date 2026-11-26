@@ -213,15 +213,15 @@
         if (document.getElementById("ps-floating-trigger")) return true;
 
         const triggerHtml = `
-            <div id="ps-floating-trigger" title="剧情大纲掰正插件" style="position:fixed;top:120px;right:28px;width:48px;height:48px;z-index:99998;display:flex;align-items:center;justify-content:center;cursor:pointer;user-select:none;">
-                <div class="ps-glow-ring" style="width:42px;height:42px;border-radius:50%;background:transparent;border:1.5px solid rgba(255,255,255,0.85);box-shadow:0 0 10px rgba(255,255,255,0.35),inset 0 0 8px rgba(255,255,255,0.2);position:relative;"></div>
-                <div class="ps-pinned-rect" style="position:absolute;width:24px;height:9px;background:#0a0a0c;border:1px solid rgba(255,255,255,0.78);border-radius:1.5px;box-shadow:0 2px 6px rgba(0,0,0,0.75);top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none;"></div>
+            <div id="ps-floating-trigger" title="点击打开 / 关闭剧情大纲插件">
+                <div class="ps-glow-ring"></div>
+                <div class="ps-pinned-rect"></div>
             </div>
         `;
         document.body.insertAdjacentHTML("beforeend", triggerHtml);
 
         const modalHtml = `
-            <div id="ps-modal-overlay" style="z-index:99999;">
+            <div id="ps-modal-overlay">
                 <div id="ps-panel">
                     <div class="ps-header">
                         <div class="ps-title-wrap">
@@ -242,7 +242,7 @@
         const closeBtn = document.getElementById("ps-close-btn");
         const overlayEl = document.getElementById("ps-modal-overlay");
 
-        makeDraggable(triggerEl, openModal);
+        makeDraggable(triggerEl, toggleModal);
 
         closeBtn.addEventListener("click", closeModal);
         overlayEl.addEventListener("click", (e) => {
@@ -256,8 +256,12 @@
         let isDragging = false;
         let moved = false;
         let startX = 0, startY = 0, origRight = 28, origTop = 120;
+        let lastTouchTime = 0;
 
         const onStart = (e) => {
+            if (e.type === "mousedown" && Date.now() - lastTouchTime < 500) return;
+            if (e.type === "touchstart") lastTouchTime = Date.now();
+
             isDragging = true;
             moved = false;
             const point = e.touches ? e.touches[0] : e;
@@ -270,20 +274,29 @@
 
         const onMove = (e) => {
             if (!isDragging) return;
+            // 面板打开处于邻居停靠状态时，禁止拖拽，确保轻点一下必定关闭
+            if (document.body.classList.contains("ps-modal-active")) return;
+
             const point = e.touches ? e.touches[0] : e;
             const dx = point.clientX - startX;
             const dy = point.clientY - startY;
-            if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
+            if (Math.abs(dx) > 6 || Math.abs(dy) > 6) moved = true;
             if (moved) {
                 el.style.top = Math.max(10, Math.min(window.innerHeight - 60, origTop + dy)) + "px";
                 el.style.right = Math.max(10, Math.min(window.innerWidth - 60, origRight - dx)) + "px";
             }
         };
 
-        const onEnd = () => {
+        const onEnd = (e) => {
+            if (e.type === "mouseup" && Date.now() - lastTouchTime < 500) return;
+            if (e.type === "touchend") lastTouchTime = Date.now();
+
             if (isDragging) {
                 isDragging = false;
-                if (!moved && onClick) onClick();
+                if (!moved && onClick) {
+                    if (e.cancelable) e.preventDefault();
+                    onClick();
+                }
             }
         };
 
@@ -292,7 +305,16 @@
         document.addEventListener("mousemove", onMove);
         document.addEventListener("touchmove", onMove, { passive: true });
         document.addEventListener("mouseup", onEnd);
-        document.addEventListener("touchend", onEnd);
+        document.addEventListener("touchend", onEnd, { passive: false });
+    }
+
+    function toggleModal() {
+        const overlay = document.getElementById("ps-modal-overlay");
+        if (overlay && overlay.classList.contains("ps-open")) {
+            closeModal();
+        } else {
+            openModal();
+        }
     }
 
     function openModal() {
@@ -300,11 +322,13 @@
         renderPanelContent();
         const overlay = document.getElementById("ps-modal-overlay");
         if (overlay) overlay.classList.add("ps-open");
+        document.body.classList.add("ps-modal-active");
     }
 
     function closeModal() {
         const overlay = document.getElementById("ps-modal-overlay");
         if (overlay) overlay.classList.remove("ps-open");
+        document.body.classList.remove("ps-modal-active");
     }
 
     /* =========================================
