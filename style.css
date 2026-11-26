@@ -11,14 +11,21 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
+    cursor: grab;
     user-select: none;
+    touch-action: none;
     -webkit-tap-highlight-color: transparent;
-    transition: top 0.2s ease, right 0.2s ease, transform 0.2s ease;
+    will-change: top, right;
+    transition: top 0.2s ease, right 0.2s ease, transform 0.15s ease;
+}
+
+#ps-floating-trigger.ps-dragging {
+    cursor: grabbing;
+    transition: none !important;
 }
 
 #ps-floating-trigger:active {
-    transform: scale(0.92);
+    transform: scale(0.94);
 }
 
 .ps-glow-ring {
@@ -49,6 +56,7 @@
 body.ps-modal-active #ps-floating-trigger {
     top: 14px !important;
     right: 16px !important;
+    cursor: pointer;
 }
 
 body.ps-modal-active .ps-glow-ring {
@@ -399,7 +407,6 @@ body.ps-modal-active .ps-glow-ring {
         height: 8px;
     }
 
-    /* 手机端打开面板时：圆环固定在顶部右上角，面板严格在圆环下方，互不重叠 */
     body.ps-modal-active #ps-floating-trigger {
         top: 10px !important;
         right: 12px !important;
