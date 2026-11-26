@@ -275,6 +275,8 @@
 
             isDragging = true;
             moved = false;
+            el.classList.add("ps-dragging");
+
             const point = e.touches ? e.touches[0] : e;
             startX = point.clientX;
             startY = point.clientY;
@@ -290,8 +292,9 @@
             const point = e.touches ? e.touches[0] : e;
             const dx = point.clientX - startX;
             const dy = point.clientY - startY;
-            if (Math.abs(dx) > 6 || Math.abs(dy) > 6) moved = true;
+            if (Math.abs(dx) > 5 || Math.abs(dy) > 5) moved = true;
             if (moved) {
+                if (e.cancelable) e.preventDefault();
                 el.style.top = Math.max(10, Math.min(window.innerHeight - 60, origTop + dy)) + "px";
                 el.style.right = Math.max(10, Math.min(window.innerWidth - 60, origRight - dx)) + "px";
             }
@@ -303,6 +306,7 @@
 
             if (isDragging) {
                 isDragging = false;
+                el.classList.remove("ps-dragging");
                 if (!moved && onClick) {
                     if (e.cancelable) e.preventDefault();
                     onClick();
@@ -313,7 +317,7 @@
         el.addEventListener("mousedown", onStart);
         el.addEventListener("touchstart", onStart, { passive: true });
         document.addEventListener("mousemove", onMove);
-        document.addEventListener("touchmove", onMove, { passive: true });
+        document.addEventListener("touchmove", onMove, { passive: false });
         document.addEventListener("mouseup", onEnd);
         document.addEventListener("touchend", onEnd, { passive: false });
     }
