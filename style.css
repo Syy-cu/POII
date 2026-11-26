@@ -15,8 +15,8 @@
     user-select: none;
     touch-action: none;
     -webkit-tap-highlight-color: transparent;
-    will-change: top, right;
-    transition: top 0.2s ease, right 0.2s ease, transform 0.15s ease;
+    will-change: transform, top, right;
+    transition: top 0.2s ease, right 0.2s ease, transform 0.2s ease;
 }
 
 #ps-floating-trigger.ps-dragging {
@@ -24,8 +24,8 @@
     transition: none !important;
 }
 
-#ps-floating-trigger:active {
-    transform: scale(0.94);
+#ps-floating-trigger:active:not(.ps-dragging) {
+    transform: scale(0.92);
 }
 
 .ps-glow-ring {
@@ -36,6 +36,7 @@
     border: 1.5px solid rgba(255, 255, 255, 0.85);
     box-shadow: 0 0 10px rgba(255, 255, 255, 0.35), inset 0 0 8px rgba(255, 255, 255, 0.2);
     position: relative;
+    pointer-events: none;
 }
 
 .ps-pinned-rect {
@@ -56,6 +57,7 @@
 body.ps-modal-active #ps-floating-trigger {
     top: 14px !important;
     right: 16px !important;
+    transform: none !important;
     cursor: pointer;
 }
 
@@ -410,6 +412,7 @@ body.ps-modal-active .ps-glow-ring {
     body.ps-modal-active #ps-floating-trigger {
         top: 10px !important;
         right: 12px !important;
+        transform: none !important;
     }
 
     #ps-modal-overlay {
