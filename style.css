@@ -1,5 +1,5 @@
 /* =========================================
-   1. 悬浮触发器：微发光空心圆环 + 钉在上面的黑色带边框长方形
+   悬浮圆环触发器
    ========================================= */
 #ps-floating-trigger {
     position: fixed;
@@ -7,41 +7,30 @@
     right: 28px;
     width: 48px;
     height: 48px;
-    z-index: 9998;
-    cursor: pointer;
+    z-index: 100000 !important;
     display: flex;
     align-items: center;
     justify-content: center;
+    cursor: pointer;
     user-select: none;
-    transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+    -webkit-tap-highlight-color: transparent;
+    transition: top 0.2s ease, right 0.2s ease, transform 0.2s ease;
 }
 
-#ps-floating-trigger:hover {
-    transform: scale(1.08);
+#ps-floating-trigger:active {
+    transform: scale(0.92);
 }
 
-/* 微发光空心圆环 */
 .ps-glow-ring {
     width: 42px;
     height: 42px;
     border-radius: 50%;
     background: transparent;
     border: 1.5px solid rgba(255, 255, 255, 0.85);
-    box-shadow:
-        0 0 10px rgba(255, 255, 255, 0.35),
-        inset 0 0 8px rgba(255, 255, 255, 0.2);
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.35), inset 0 0 8px rgba(255, 255, 255, 0.2);
     position: relative;
-    transition: box-shadow 0.3s ease, border-color 0.3s ease;
 }
 
-#ps-floating-trigger:hover .ps-glow-ring {
-    border-color: rgba(255, 255, 255, 1);
-    box-shadow:
-        0 0 16px rgba(255, 255, 255, 0.65),
-        inset 0 0 10px rgba(255, 255, 255, 0.35);
-}
-
-/* 钉在圆环上的黑色长方形（带边框） */
 .ps-pinned-rect {
     position: absolute;
     width: 24px;
@@ -56,299 +45,179 @@
     pointer-events: none;
 }
 
+/* 面板打开时：圆环固定在右上角邻居位，绝不与面板重叠 */
+body.ps-modal-active #ps-floating-trigger {
+    top: 14px !important;
+    right: 16px !important;
+}
+
+body.ps-modal-active .ps-glow-ring {
+    border-color: rgba(255, 255, 255, 1);
+    box-shadow: 0 0 14px rgba(255, 255, 255, 0.65), inset 0 0 8px rgba(255, 255, 255, 0.35);
+}
+
 /* =========================================
-   2. 毛玻璃主面板（透、高级、干净）
+   遮罩与毛玻璃主面板
    ========================================= */
 #ps-modal-overlay {
     position: fixed;
     inset: 0;
-    z-index: 9999;
-    background: rgba(8, 10, 14, 0.35);
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
+    z-index: 99990 !important;
+    background: rgba(0, 0, 0, 0.58);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     display: none;
     align-items: center;
     justify-content: center;
-    opacity: 0;
-    transition: opacity 0.25s ease;
+    padding: 72px 16px 20px 16px;
+    box-sizing: border-box;
 }
 
 #ps-modal-overlay.ps-open {
     display: flex;
-    opacity: 1;
 }
 
 #ps-panel {
-    width: 560px;
-    max-width: 92vw;
-    max-height: 84vh;
-    display: flex;
-    flex-direction: column;
-    background: rgba(22, 24, 30, 0.58);
-    backdrop-filter: blur(28px) saturate(160%);
-    -webkit-backdrop-filter: blur(28px) saturate(160%);
+    width: 100%;
+    max-width: 560px;
+    max-height: calc(100dvh - 96px);
+    background: rgba(18, 19, 24, 0.88);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
     border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 16px;
-    box-shadow:
-        0 24px 64px rgba(0, 0, 0, 0.55),
-        inset 0 1px 0 rgba(255, 255, 255, 0.12);
-    color: rgba(245, 247, 250, 0.92);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.65);
+    color: #f0f0f5;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    box-sizing: border-box;
 }
 
-/* 顶部栏 */
+/* 顶部标题栏 */
 .ps-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 22px;
+    padding: 14px 18px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.02);
+    flex-shrink: 0;
 }
 
 .ps-title-wrap {
     display: flex;
     align-items: center;
     gap: 10px;
+    flex-wrap: wrap;
 }
 
 .ps-title {
     font-size: 14px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.95);
+    font-weight: 600;
+    letter-spacing: 1.2px;
+    color: #ffffff;
 }
 
 .ps-badge {
-    font-size: 10px;
-    padding: 2px 7px;
+    font-size: 11px;
+    padding: 2px 8px;
     border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    background: rgba(255, 255, 255, 0.06);
-    color: rgba(255, 255, 255, 0.75);
-    letter-spacing: 0.04em;
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.15);
 }
 
 .ps-badge.ps-sealed {
-    border-color: rgba(255, 215, 130, 0.45);
-    color: rgba(255, 226, 165, 0.95);
-    background: rgba(255, 215, 130, 0.08);
+    background: rgba(255, 200, 90, 0.15);
+    color: #ffe2a5;
+    border-color: rgba(255, 200, 90, 0.35);
 }
 
 .ps-close-btn {
-    background: transparent;
-    border: none;
-    color: rgba(255, 255, 255, 0.55);
-    font-size: 18px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    color: #ffffff;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    font-size: 20px;
+    line-height: 1;
     cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 6px;
-    transition: color 0.2s, background 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
 }
 
 .ps-close-btn:hover {
-    color: #fff;
-    background: rgba(255, 255, 255, 0.08);
-}
-
-/* 内容区 */
-.ps-body {
-    padding: 20px 22px;
-    overflow-y: auto;
-    flex: 1;
-}
-
-.ps-body::-webkit-scrollbar {
-    width: 4px;
-}
-
-.ps-body::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.18);
-    border-radius: 4px;
 }
 
-/* =========================================
-   3. 锁定页面（防剧透界面）
-   ========================================= */
-.ps-lock-screen {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 36px 16px;
-    text-align: center;
-    gap: 16px;
-}
-
-.ps-lock-icon {
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    border: 1px solid rgba(255, 255, 255, 0.22);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    background: rgba(255, 255, 255, 0.04);
-    box-shadow: 0 0 20px rgba(255, 255, 255, 0.06);
-}
-
-.ps-lock-desc {
-    font-size: 13px;
-    color: rgba(255, 255, 255, 0.65);
-    line-height: 1.6;
-    max-width: 340px;
-}
-
-.ps-input-row {
-    display: flex;
-    gap: 8px;
-    width: 100%;
-    max-width: 300px;
-}
-
-/* 通用输入框与按钮 */
-.ps-input,
-.ps-textarea {
-    width: 100%;
-    box-sizing: border-box;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 8px;
-    padding: 9px 12px;
-    color: rgba(255, 255, 255, 0.92);
-    font-size: 13px;
-    outline: none;
-    transition: border-color 0.2s, background 0.2s;
-}
-
-.ps-input:focus,
-.ps-textarea:focus {
-    border-color: rgba(255, 255, 255, 0.4);
-    background: rgba(255, 255, 255, 0.08);
-}
-
-.ps-input:disabled,
-.ps-textarea:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-}
-
-.ps-textarea {
-    resize: vertical;
-    min-height: 84px;
-    line-height: 1.55;
-}
-
-.ps-btn {
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    color: rgba(255, 255, 255, 0.92);
-    padding: 8px 14px;
-    border-radius: 8px;
-    font-size: 12px;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.2s, border-color 0.2s;
-}
-
-.ps-btn:hover {
-    background: rgba(255, 255, 255, 0.18);
-    border-color: rgba(255, 255, 255, 0.35);
-}
-
-.ps-btn-primary {
-    background: rgba(255, 255, 255, 0.88);
-    color: #0e1015;
-    border-color: transparent;
-    font-weight: 500;
-}
-
-.ps-btn-primary:hover {
-    background: #ffffff;
-}
-
-.ps-btn-danger {
-    background: rgba(255, 90, 90, 0.12);
-    border-color: rgba(255, 90, 90, 0.3);
-    color: #ff9a9a;
-}
-
-.ps-btn-danger:hover {
-    background: rgba(255, 90, 90, 0.22);
-}
-
-.ps-btn-sm {
-    padding: 4px 10px;
-    font-size: 11px;
-}
-
-/* =========================================
-   4. 标签页切换
-   ========================================= */
+/* 标签页切换 */
 .ps-tabs {
     display: flex;
-    gap: 6px;
-    padding: 0 22px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.015);
+    background: rgba(0, 0, 0, 0.2);
+    flex-shrink: 0;
 }
 
 .ps-tab {
-    padding: 12px 14px;
-    font-size: 12.5px;
-    color: rgba(255, 255, 255, 0.55);
+    flex: 1;
+    text-align: center;
+    padding: 11px 8px;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.6);
     cursor: pointer;
     border-bottom: 2px solid transparent;
-    transition: color 0.2s, border-color 0.2s;
+    transition: all 0.2s;
 }
 
 .ps-tab.ps-active {
     color: #ffffff;
-    border-bottom-color: rgba(255, 255, 255, 0.9);
+    font-weight: 500;
+    border-bottom-color: #ffffff;
+    background: rgba(255, 255, 255, 0.05);
 }
 
-/* =========================================
-   5. 表单与卡片组件
-   ========================================= */
+/* 主内容区 */
+.ps-body {
+    padding: 16px 18px;
+    overflow-y: auto;
+    flex: 1;
+    -webkit-overflow-scrolling: touch;
+}
+
 .ps-section {
-    margin-bottom: 20px;
+    margin-bottom: 18px;
+}
+
+.ps-section:last-child {
+    margin-bottom: 0;
 }
 
 .ps-section-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
     margin-bottom: 8px;
 }
 
 .ps-label {
-    font-size: 12px;
+    font-size: 12.5px;
     font-weight: 500;
-    color: rgba(255, 255, 255, 0.72);
-    letter-spacing: 0.04em;
+    color: rgba(255, 255, 255, 0.85);
 }
 
-.ps-ending-card {
-    background: rgba(255, 255, 255, 0.035);
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    border-radius: 10px;
-    padding: 12px;
-    margin-bottom: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+.ps-hint {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.55);
+    line-height: 1.5;
+    margin-top: 6px;
 }
 
-.ps-ending-top {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-}
-
-/* 结局百分比进度条 */
+/* 结局进度条 */
 .ps-prob-item {
     margin-bottom: 12px;
 }
@@ -356,74 +225,217 @@
 .ps-prob-head {
     display: flex;
     justify-content: space-between;
-    font-size: 12.5px;
+    font-size: 13px;
     margin-bottom: 5px;
+    color: #f4f4f8;
 }
 
 .ps-prob-bar-bg {
-    height: 6px;
-    background: rgba(255, 255, 255, 0.08);
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.1);
     border-radius: 999px;
     overflow: hidden;
 }
 
 .ps-prob-bar-fill {
     height: 100%;
-    background: linear-gradient(90deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0.95));
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.65), #ffffff);
     border-radius: 999px;
-    transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+    transition: width 0.35s ease;
 }
 
-/* 命运节点卡片 */
-.ps-node-card {
-    background: rgba(255, 255, 255, 0.035);
+/* 输入框与卡片 */
+.ps-input,
+.ps-textarea {
+    width: 100%;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    color: #ffffff;
+    padding: 9px 11px;
+    font-size: 13px;
+    box-sizing: border-box;
+    outline: none;
+    font-family: inherit;
+}
+
+.ps-input:focus,
+.ps-textarea:focus {
+    border-color: rgba(255, 255, 255, 0.45);
+}
+
+.ps-textarea {
+    min-height: 96px;
+    resize: vertical;
+    line-height: 1.5;
+}
+
+.ps-input:disabled,
+.ps-textarea:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+}
+
+.ps-input-row {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+    max-width: 340px;
+}
+
+.ps-ending-card {
+    background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 10px;
-    padding: 12px 14px;
+    padding: 10px;
     margin-bottom: 10px;
 }
 
-.ps-node-header {
+.ps-ending-top {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    gap: 8px;
     margin-bottom: 8px;
-    font-size: 11.5px;
-    color: rgba(255, 255, 255, 0.55);
+    align-items: center;
 }
 
-.ps-node-actions {
+/* 按钮 */
+.ps-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+    padding: 7px 12px;
+    border-radius: 8px;
+    font-size: 12.5px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+}
+
+.ps-btn:hover {
+    background: rgba(255, 255, 255, 0.18);
+}
+
+.ps-btn-primary {
+    background: rgba(255, 255, 255, 0.88);
+    color: #0e0f14;
+    border-color: #ffffff;
+    font-weight: 600;
+}
+
+.ps-btn-primary:hover {
+    background: #ffffff;
+}
+
+.ps-btn-danger {
+    background: rgba(235, 85, 85, 0.2);
+    border-color: rgba(235, 85, 85, 0.45);
+    color: #ff9c9c;
+}
+
+.ps-btn-sm {
+    padding: 5px 10px;
+    font-size: 12px;
+}
+
+/* 锁定界面 */
+.ps-lock-screen {
     display: flex;
-    gap: 6px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 24px 10px;
+    gap: 12px;
 }
 
-.ps-node-text {
-    font-size: 13px;
+.ps-lock-icon {
+    font-size: 32px;
+}
+
+.ps-lock-desc {
+    font-size: 12.5px;
+    color: rgba(255, 255, 255, 0.65);
     line-height: 1.6;
-    color: rgba(255, 255, 255, 0.88);
-    white-space: pre-wrap;
 }
 
-/* 底部工具栏 */
+/* 底部操作栏 */
 .ps-footer {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 22px;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.02);
     gap: 8px;
+    padding: 12px 18px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.22);
+    flex-shrink: 0;
     flex-wrap: wrap;
 }
 
 .ps-footer-group {
     display: flex;
-    gap: 8px;
     align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
-.ps-hint {
-    font-size: 11.5px;
-    color: rgba(255, 255, 255, 0.48);
-    margin-top: 6px;
+/* =========================================
+   手机端专项自适应（小屏彻底防遮挡、防裁切）
+   ========================================= */
+@media (max-width: 768px) {
+    #ps-floating-trigger {
+        width: 44px;
+        height: 44px;
+        right: 14px;
+    }
+
+    .ps-glow-ring {
+        width: 38px;
+        height: 38px;
+    }
+
+    .ps-pinned-rect {
+        width: 21px;
+        height: 8px;
+    }
+
+    /* 手机端打开面板时：圆环固定在顶部右上角，面板严格在圆环下方，互不重叠 */
+    body.ps-modal-active #ps-floating-trigger {
+        top: 10px !important;
+        right: 12px !important;
+    }
+
+    #ps-modal-overlay {
+        align-items: flex-start;
+        padding: 62px 10px 14px 10px;
+    }
+
+    #ps-panel {
+        width: 100%;
+        max-width: 100%;
+        max-height: calc(100dvh - 76px);
+        border-radius: 14px;
+    }
+
+    .ps-header {
+        padding: 11px 14px;
+    }
+
+    .ps-body {
+        padding: 12px 14px;
+    }
+
+    .ps-footer {
+        padding: 10px 14px;
+        gap: 6px;
+    }
+
+    .ps-input-row {
+        max-width: 100%;
+    }
+
+    .ps-btn-sm {
+        padding: 6px 9px;
+        font-size: 11.5px;
+    }
 }
