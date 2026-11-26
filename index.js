@@ -2,9 +2,10 @@
     const MODULE_NAME = "st_plot_steering";
     const PROMPT_KEY = "st_plot_steering_prompt";
 
-    function createBlankProfile(title = "未命名剧情线") {
+    function createBlankPackage(title = "未命名剧情线") {
+        const ts = Date.now();
         return {
-            id: "pkg_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+            id: "pkg_" + ts + "_" + Math.floor(Math.random() * 1000),
             storyTitle: title,
             plotline: "",
             endings: [
@@ -13,14 +14,14 @@
             ],
             passwordHash: "",
             authorPasswordHash: "",
-            isSealed: false,
-            updatedAt: Date.now()
+            isSealed: false
         };
     }
 
-    // 每个封包在当前浏览器会话中的解锁状态（互不干扰）
-    const sessionAuthMap = {};
+    let isUnlocked = false;
+    let isAuthorUnlocked = false;
     let activeTab = "fate";
+    let pkgDrawerOpen = false;
     let eventsBound = false;
 
     function hashPassword(str) {
@@ -42,90 +43,71 @@
     }
 
     /* =========================================
-       多存档封包库管理（自动迁移旧版单条数据）
+       多封包存档数据结构（兼容旧版自动迁移）
        ========================================= */
-    function getStore() {
+    function getRootSettings() {
         const ctx = getContextSafe();
         const extSettings = ctx.extensionSettings || (window._psFallbackSettings = window._psFallbackSettings || {});
-
         if (!extSettings[MODULE_NAME]) {
-            const first = createBlankProfile();
+            const firstPkg = createBlankPackage();
             extSettings[MODULE_NAME] = {
                 enabled: true,
-                activeProfileId: first.id,
-                profiles: [first]
+                activePackageId: firstPkg.id,
+                packages: [firstPkg]
             };
         }
 
         const root = extSettings[MODULE_NAME];
 
-        // 兼容迁移旧版数据结构
-        if (!Array.isArray(root.profiles)) {
+        // 兼容旧版单剧情线结构，自动迁入封包列表
+        if (!Array.isArray(root.packages)) {
             const migrated = {
-                id: "pkg_migrated_" + Date.now(),
+                id: "pkg_migrated",
                 storyTitle: root.storyTitle || "未命名剧情线",
                 plotline: root.plotline || "",
                 endings: Array.isArray(root.endings) && root.endings.length
-                    ? root.endings.map(e => ({
-                        id: e.id || ("end_" + Date.now()),
-                        name: e.name || "未命名结局",
-                        desc: e.desc || "",
-                        prob: typeof e.prob === "number" ? e.prob : 0
-                    }))
+                    ? root.endings
                     : [
                         { id: "end_1", name: "结局 A", desc: "", prob: 0 },
                         { id: "end_2", name: "结局 B", desc: "", prob: 0 }
                     ],
                 passwordHash: root.passwordHash || "",
                 authorPasswordHash: root.authorPasswordHash || "",
-                isSealed: Boolean(root.isSealed),
-                updatedAt: Date.now()
+                isSealed: Boolean(root.isSealed)
             };
-            root.enabled = typeof root.enabled === "boolean" ? root.enabled : true;
-            root.profiles = [migrated];
-            root.activeProfileId = migrated.id;
-            delete root.storyTitle;
-            delete root.plotline;
-            delete root.endings;
-            delete root.passwordHash;
-            delete root.authorPasswordHash;
-            delete root.isSealed;
+            root.packages = [migrated];
+            root.activePackageId = migrated.id;
+            if (typeof root.enabled !== "boolean") root.enabled = true;
         }
 
-        if (root.profiles.length === 0) {
-            const blank = createBlankProfile();
-            root.profiles.push(blank);
-            root.activeProfileId = blank.id;
+        if (root.packages.length === 0) {
+            const blank = createBlankPackage();
+            root.packages.push(blank);
+            root.activePackageId = blank.id;
         }
 
-        if (!root.profiles.some(p => p.id === root.activeProfileId)) {
-            root.activeProfileId = root.profiles[0].id;
+        if (!root.packages.some(p => p.id === root.activePackageId)) {
+            root.activePackageId = root.packages[0].id;
         }
 
         return root;
     }
 
-    function getActiveProfile() {
-        const store = getStore();
-        let profile = store.profiles.find(p => p.id === store.activeProfileId);
-        if (!profile) {
-            profile = store.profiles[0];
-            store.activeProfileId = profile.id;
-        }
-        if (typeof profile.authorPasswordHash === "undefined") profile.authorPasswordHash = "";
-        if (!Array.isArray(profile.endings) || profile.endings.length === 0) {
-            profile.endings = [
+    function getActivePackage() {
+        const root = getRootSettings();
+        const pkg = root.packages.find(p => p.id === root.activePackageId) || root.packages[0];
+        if (typeof pkg.authorPasswordHash === "undefined") pkg.authorPasswordHash = "";
+        if (!Array.isArray(pkg.endings) || pkg.endings.length === 0) {
+            pkg.endings = [
                 { id: "end_1", name: "结局 A", desc: "", prob: 0 },
                 { id: "end_2", name: "结局 B", desc: "", prob: 0 }
             ];
         }
-        return profile;
+        return pkg;
     }
 
     function saveSettings() {
         try {
-            const profile = getActiveProfile();
-            profile.updatedAt = Date.now();
             const ctx = getContextSafe();
             if (typeof ctx.saveSettingsDebounced === "function") {
                 ctx.saveSettingsDebounced();
@@ -146,57 +128,74 @@
     }
 
     /* =========================================
-       按封包独立的「记住密码」状态
+       记住密码（按封包独立存储）
        ========================================= */
-    function getAuthStorageKey(p) {
-        return `ps_remember_${p.id}_${p.passwordHash || "none"}_${p.authorPasswordHash || "none"}`;
+    function getAuthStorageKey(pkg) {
+        return "ps_remember_" + pkg.id + "_" + (pkg.passwordHash || "none") + "_" + (pkg.authorPasswordHash || "none");
     }
 
-    function getProfileAuth(p) {
-        const hasAnyPassword = Boolean(p.passwordHash || p.authorPasswordHash);
-        if (!hasAnyPassword) {
-            return { isUnlocked: true, isAuthorUnlocked: true };
+    function restoreSavedAuth() {
+        try {
+            const pkg = getActivePackage();
+            const hasAnyPwd = Boolean(pkg.passwordHash || pkg.authorPasswordHash);
+            if (!hasAnyPwd) {
+                isUnlocked = true;
+                isAuthorUnlocked = !pkg.isSealed;
+                return;
+            }
+            isUnlocked = false;
+            isAuthorUnlocked = false;
+            const saved = localStorage.getItem(getAuthStorageKey(pkg));
+            if (saved === "author" && pkg.authorPasswordHash) {
+                isUnlocked = true;
+                isAuthorUnlocked = true;
+            } else if (saved === "player" && pkg.passwordHash) {
+                isUnlocked = true;
+                isAuthorUnlocked = false;
+            }
+        } catch (e) {}
+    }
+
+    function clearSavedAuth() {
+        try {
+            const pkg = getActivePackage();
+            localStorage.removeItem(getAuthStorageKey(pkg));
+        } catch (e) {}
+    }
+
+    function switchPackage(pkgId) {
+        const root = getRootSettings();
+        if (!root.packages.some(p => p.id === pkgId)) return;
+        root.activePackageId = pkgId;
+        pkgDrawerOpen = false;
+        activeTab = "fate";
+        restoreSavedAuth();
+        saveSettings();
+        renderPanelContent();
+    }
+
+    function deletePackage(pkgId) {
+        const root = getRootSettings();
+        const target = root.packages.find(p => p.id === pkgId);
+        if (!target) return;
+        if (!confirm(`确定要删除存档「${target.storyTitle || "未命名剧情线"}」吗？删除后无法恢复。`)) return;
+
+        root.packages = root.packages.filter(p => p.id !== pkgId);
+        if (root.packages.length === 0) {
+            const blank = createBlankPackage();
+            root.packages.push(blank);
+            root.activePackageId = blank.id;
+        } else if (root.activePackageId === pkgId) {
+            root.activePackageId = root.packages[0].id;
         }
 
-        if (sessionAuthMap[p.id]) {
-            return sessionAuthMap[p.id];
-        }
-
-        try {
-            const saved = localStorage.getItem(getAuthStorageKey(p));
-            if (saved === "author" && p.authorPasswordHash) {
-                sessionAuthMap[p.id] = { isUnlocked: true, isAuthorUnlocked: true };
-                return sessionAuthMap[p.id];
-            }
-            if (saved === "player" && p.passwordHash) {
-                sessionAuthMap[p.id] = { isUnlocked: true, isAuthorUnlocked: false };
-                return sessionAuthMap[p.id];
-            }
-        } catch (e) {}
-
-        return { isUnlocked: false, isAuthorUnlocked: false };
-    }
-
-    function setProfileAuth(p, isUnlocked, isAuthorUnlocked, remember) {
-        sessionAuthMap[p.id] = { isUnlocked, isAuthorUnlocked };
-        try {
-            if (remember && isUnlocked) {
-                localStorage.setItem(getAuthStorageKey(p), isAuthorUnlocked ? "author" : "player");
-            } else {
-                localStorage.removeItem(getAuthStorageKey(p));
-            }
-        } catch (e) {}
-    }
-
-    function clearProfileAuth(p) {
-        delete sessionAuthMap[p.id];
-        try {
-            localStorage.removeItem(getAuthStorageKey(p));
-        } catch (e) {}
+        restoreSavedAuth();
+        saveSettings();
+        renderPanelContent();
     }
 
     /* =========================================
-       解析当前消息中的结局百分比
+       解析当前消息中的结局分数
        ========================================= */
     function parseProbsFromText(text) {
         if (!text) return null;
@@ -213,9 +212,9 @@
 
     function applyProbsToEndings(probs) {
         if (!probs || typeof probs !== "object") return false;
-        const p = getActiveProfile();
+        const pkg = getActivePackage();
         let changed = false;
-        p.endings.forEach(e => {
+        pkg.endings.forEach(e => {
             if (typeof probs[e.id] === "number") {
                 const nextProb = Math.max(0, Math.min(100, Math.round(probs[e.id])));
                 if (e.prob !== nextProb) {
@@ -229,8 +228,8 @@
 
     function syncProbsFromCurrentMessage(messageId) {
         try {
-            const store = getStore();
-            if (!store.enabled) return;
+            const root = getRootSettings();
+            if (!root.enabled) return;
 
             const ctx = getContextSafe();
             const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
@@ -255,41 +254,46 @@
     }
 
     /* =========================================
-       核心：向 AI 注入当前启用封包的大纲与结局占比指令
+       核心：向 AI 注入当前选中封包的大纲与单结局累加规则
        ========================================= */
     function injectPlotPrompt() {
         try {
             const ctx = getContextSafe();
             if (typeof ctx.setExtensionPrompt !== "function") return;
 
-            const store = getStore();
-            const p = getActiveProfile();
+            const root = getRootSettings();
+            const pkg = getActivePackage();
             const promptType = ctx.extension_prompt_types ? ctx.extension_prompt_types.IN_PROMPT : 1;
 
-            if (!store.enabled || (!p.plotline.trim() && p.endings.length === 0)) {
+            if (!root.enabled || (!pkg.plotline.trim() && pkg.endings.length === 0)) {
                 ctx.setExtensionPrompt(PROMPT_KEY, "", promptType, 0);
                 return;
             }
 
-            const endingsText = p.endings
-                .map((e, i) => `${i + 1}. [ID:${e.id}] ${e.name}（当前偏向 ${e.prob}%）：${e.desc || "无详细描述"}`)
+            const endingsText = pkg.endings
+                .map((e, i) => `${i + 1}. [ID:${e.id}] ${e.name}（当前偏向进度 ${e.prob}%）：${e.desc || "无详细描述"}`)
                 .join("\n");
 
             const promptText = [
-                "[系统隐藏指令：剧情大纲与结局占比掰正系统]",
-                "你必须在保持角色扮演自然流畅的前提下，严格遵循以下主线大纲与结局设定。请结合当前对话历史与已有记忆/设定判断当前进度：已经发生或已经完成的剧情与线索直接跳过，绝不重复触发，顺着当前进度自然往后推进；若玩家做出重大反转或改变了既有记忆事实，请根据最新事实重新评估并调整各结局偏向（所有结局初始均为 0%，随剧情触发逐步增加，各结局总和不超过 100%）。",
+                "[系统隐藏指令：剧情大纲与结局累加判定系统]",
+                "你必须在保持角色扮演自然流畅的前提下，严格遵循以下主线大纲与结局设定。请结合当前对话历史与已有记忆/设定判断当前进度：已经发生或已经完成的剧情与线索直接跳过，绝不重复触发，顺着当前进度自然往后推进。",
                 "",
                 "【主线大纲】",
-                p.plotline || "（未设定）",
+                pkg.plotline || "（未设定）",
                 "",
-                "【预设结局分支】",
+                "【预设结局分支（初始均为 0%）】",
                 endingsText,
                 "",
+                "【结局判定与加分铁律】",
+                "1. 所有结局初始为 0%，各自独立累加，不需要总和为 100%。",
+                "2. 每轮回复，请判断本轮剧情最偏向哪一个结局，【每次只能给这 1 个最偏向的结局增加数值】（根据剧情权重增加 5~15，上限 100），其他结局数值保持原样不变；若本轮纯日常无偏向，则全部保持不变。",
+                "3. 当剧情推进至终局阶段时，请以【当前数值最高】的那个结局作为最终走向并收束剧情。",
+                "",
                 "【强制输出格式】",
-                "在每次回复的最末尾，必须附加一个隐藏的 JSON 判定块，严格使用 <plot_steer> 和 </plot_steer> 包裹（不要套用代码块），只输出各结局当前百分比（初始为 0，总和不超过 100）：",
+                "在每次回复的最末尾，必须附加一个隐藏的 JSON 判定块，严格使用 <plot_steer> 和 </plot_steer> 包裹（不要套用代码块），输出更新后的各结局数值：",
                 "<plot_steer>",
                 "{",
-                `  "probs": { ${p.endings.map(e => `"${e.id}": ${e.prob}`).join(", ")} }`,
+                `  "probs": { ${pkg.endings.map(e => `"${e.id}": ${e.prob}`).join(", ")} }`,
                 "}",
                 "</plot_steer>"
             ].join("\n");
@@ -328,6 +332,7 @@
                             <button class="ps-close-btn" id="ps-close-btn">×</button>
                         </div>
                     </div>
+                    <div id="ps-pkg-bar-container"></div>
                     <div id="ps-tabs-container"></div>
                     <div class="ps-body" id="ps-body"></div>
                     <div class="ps-footer" id="ps-footer"></div>
@@ -344,8 +349,8 @@
         makeDraggable(triggerEl, toggleModal);
 
         headerToggleBtn.addEventListener("click", () => {
-            const store = getStore();
-            store.enabled = !store.enabled;
+            const root = getRootSettings();
+            root.enabled = !root.enabled;
             saveSettings();
             renderPanelContent();
         });
@@ -456,6 +461,7 @@
     }
 
     function openModal() {
+        restoreSavedAuth();
         renderPanelContent();
         const overlay = document.getElementById("ps-modal-overlay");
         if (overlay) overlay.classList.add("ps-open");
@@ -487,57 +493,127 @@
         }
     }
 
+    function renderPackageBar(containerEl) {
+        const root = getRootSettings();
+        const activePkg = getActivePackage();
+
+        let drawerHtml = "";
+        if (pkgDrawerOpen) {
+            const listHtml = root.packages.map(p => {
+                const isActive = p.id === activePkg.id;
+                const isLockedPkg = Boolean(p.passwordHash || p.authorPasswordHash);
+                const maxEnd = (p.endings || []).reduce((best, cur) => (cur.prob > (best ? best.prob : -1) ? cur : best), null);
+                const metaText = p.isSealed
+                    ? (isLockedPkg ? "封印封包 · 🔒 加密存档" : "封印封包")
+                    : (maxEnd && maxEnd.prob > 0 ? `自建 · 领先：${escapeHtml(maxEnd.name)} (${maxEnd.prob}%)` : "自建 · 初始 0%");
+
+                return `
+                    <div class="ps-pkg-item ${isActive ? "ps-pkg-active" : ""}" data-pkg-id="${escapeHtml(p.id)}">
+                        <div class="ps-pkg-item-info">
+                            <div class="ps-pkg-item-title">${isActive ? "▸ " : ""}${escapeHtml(p.storyTitle || "未命名剧情线")}</div>
+                            <div class="ps-pkg-item-meta">${metaText}</div>
+                        </div>
+                        <button class="ps-btn ps-btn-danger ps-btn-sm ps-del-pkg-btn" data-pkg-id="${escapeHtml(p.id)}">删除</button>
+                    </div>
+                `;
+            }).join("");
+
+            drawerHtml = `
+                <div class="ps-pkg-drawer">
+                    <div class="ps-pkg-list">${listHtml}</div>
+                    <div class="ps-pkg-drawer-actions">
+                        <button id="ps-new-blank-pkg" class="ps-btn ps-btn-sm">+ 新建空白线</button>
+                        <label class="ps-btn ps-btn-primary ps-btn-sm" style="cursor:pointer;">
+                            + 导入新封包
+                            <input type="file" id="ps-drawer-import-file" accept=".json" style="display:none;" />
+                        </label>
+                    </div>
+                </div>
+            `;
+        }
+
+        containerEl.innerHTML = `
+            <div class="ps-pkg-bar">
+                <div class="ps-pkg-current">
+                    <span style="opacity:0.6;flex-shrink:0;">当前存档：</span>
+                    <span class="ps-pkg-current-name">${escapeHtml(activePkg.storyTitle || "未命名剧情线")}</span>
+                </div>
+                <button id="ps-toggle-pkg-drawer" class="ps-btn ps-btn-sm">
+                    封包列表 (${root.packages.length}) ${pkgDrawerOpen ? "▲" : "▼"}
+                </button>
+            </div>
+            ${drawerHtml}
+        `;
+
+        document.getElementById("ps-toggle-pkg-drawer").addEventListener("click", () => {
+            pkgDrawerOpen = !pkgDrawerOpen;
+            renderPanelContent();
+        });
+
+        if (pkgDrawerOpen) {
+            containerEl.querySelectorAll(".ps-pkg-item").forEach(item => {
+                item.addEventListener("click", (e) => {
+                    if (e.target.closest(".ps-del-pkg-btn")) return;
+                    const id = item.getAttribute("data-pkg-id");
+                    switchPackage(id);
+                });
+            });
+
+            containerEl.querySelectorAll(".ps-del-pkg-btn").forEach(btn => {
+                btn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    deletePackage(btn.getAttribute("data-pkg-id"));
+                });
+            });
+
+            document.getElementById("ps-new-blank-pkg").addEventListener("click", () => {
+                const blank = createBlankPackage(`新剧情线 ${root.packages.length + 1}`);
+                root.packages.push(blank);
+                root.activePackageId = blank.id;
+                pkgDrawerOpen = false;
+                activeTab = "edit";
+                isUnlocked = true;
+                isAuthorUnlocked = true;
+                saveSettings();
+                renderPanelContent();
+            });
+
+            document.getElementById("ps-drawer-import-file").addEventListener("change", handleImportPackage);
+        }
+    }
+
     function renderPanelContent() {
-        const store = getStore();
-        const p = getActiveProfile();
-        const auth = getProfileAuth(p);
-        const canEdit = !p.isSealed || auth.isAuthorUnlocked;
+        const root = getRootSettings();
+        const pkg = getActivePackage();
+        const canEdit = !pkg.isSealed || isAuthorUnlocked;
         const badgeEl = document.getElementById("ps-mode-badge");
+        const pkgBarEl = document.getElementById("ps-pkg-bar-container");
         const tabsEl = document.getElementById("ps-tabs-container");
         const bodyEl = document.getElementById("ps-body");
         const footerEl = document.getElementById("ps-footer");
 
-        updateHeaderToggleUI(store.enabled);
+        updateHeaderToggleUI(root.enabled);
+        renderPackageBar(pkgBarEl);
 
-        if (p.isSealed) {
-            badgeEl.textContent = auth.isAuthorUnlocked ? "已封印 · 作者已提权" : "已封印 · 防剧透包";
+        if (pkg.isSealed) {
+            badgeEl.textContent = isAuthorUnlocked ? "已封印 · 作者已提权" : "已封印 · 防剧透包";
             badgeEl.classList.add("ps-sealed");
         } else {
             badgeEl.textContent = "作者编辑模式";
             badgeEl.classList.remove("ps-sealed");
         }
 
-        const hasAnyPassword = Boolean(p.passwordHash || p.authorPasswordHash);
+        const hasAnyPassword = Boolean(pkg.passwordHash || pkg.authorPasswordHash);
 
-        // 锁定状态：仍允许切换到「封包列表」查看/切换其他已存封包
-        if (hasAnyPassword && !auth.isUnlocked) {
-            tabsEl.innerHTML = `
-                <div class="ps-tabs">
-                    <div class="ps-tab ${activeTab !== "library" ? "ps-active" : ""}" data-tab="fate">🔒 解锁当前封包</div>
-                    <div class="ps-tab ${activeTab === "library" ? "ps-active" : ""}" data-tab="library">已存封包 (${store.profiles.length})</div>
-                </div>
-            `;
-
-            tabsEl.querySelectorAll(".ps-tab").forEach(tab => {
-                tab.addEventListener("click", () => {
-                    activeTab = tab.getAttribute("data-tab");
-                    renderPanelContent();
-                });
-            });
-
-            if (activeTab === "library") {
-                renderLibraryTab(bodyEl);
-                renderFooter(footerEl, false);
-                return;
-            }
-
+        if (hasAnyPassword && !isUnlocked) {
+            tabsEl.innerHTML = "";
             bodyEl.innerHTML = `
                 <div class="ps-lock-screen">
                     <div class="ps-lock-icon">🔒</div>
-                    <div style="font-size:15px;font-weight:500;">${escapeHtml(p.storyTitle)}</div>
+                    <div style="font-size:15px;font-weight:500;">${escapeHtml(pkg.storyTitle)}</div>
                     <div class="ps-lock-desc">
                         当前剧情线与结局大纲已加密锁定。<br>
-                        输入玩家密码可查看结局占比；输入作者密码可直接进入编辑模式。
+                        输入玩家密码可查看结局进度；输入作者密码可直接进入编辑模式。
                     </div>
                     <div class="ps-input-row">
                         <input type="password" id="ps-unlock-input" class="ps-input" placeholder="输入解锁密码或作者密码..." />
@@ -551,20 +627,30 @@
                 </div>
             `;
 
-            renderFooter(footerEl, false);
+            footerEl.innerHTML = `
+                <div class="ps-footer-group">
+                    <label class="ps-btn ps-btn-sm" style="cursor:pointer;">
+                        导入新封包
+                        <input type="file" id="ps-import-file" accept=".json" style="display:none;" />
+                    </label>
+                </div>
+                <div class="ps-footer-group">
+                    <span class="ps-hint" style="margin:0;">上方可切换其他已存封包</span>
+                </div>
+            `;
 
             document.getElementById("ps-unlock-btn").addEventListener("click", attemptUnlock);
             document.getElementById("ps-unlock-input").addEventListener("keydown", (e) => {
                 if (e.key === "Enter") attemptUnlock();
             });
+            document.getElementById("ps-import-file").addEventListener("change", handleImportPackage);
             return;
         }
 
         tabsEl.innerHTML = `
             <div class="ps-tabs">
-                <div class="ps-tab ${activeTab === "fate" ? "ps-active" : ""}" data-tab="fate">结局偏向占比</div>
-                <div class="ps-tab ${activeTab === "edit" ? "ps-active" : ""}" data-tab="edit">${canEdit ? "大纲与结局" : "大纲(只读)"}</div>
-                <div class="ps-tab ${activeTab === "library" ? "ps-active" : ""}" data-tab="library">已存封包 (${store.profiles.length})</div>
+                <div class="ps-tab ${activeTab === "fate" ? "ps-active" : ""}" data-tab="fate">结局偏向进度</div>
+                <div class="ps-tab ${activeTab === "edit" ? "ps-active" : ""}" data-tab="edit">${canEdit ? "大纲与结局编辑" : "大纲内容（只读）"}</div>
             </div>
         `;
 
@@ -577,31 +663,41 @@
 
         if (activeTab === "fate") {
             renderFateTab(bodyEl);
-        } else if (activeTab === "edit") {
-            renderEditTab(bodyEl);
         } else {
-            renderLibraryTab(bodyEl);
+            renderEditTab(bodyEl);
         }
 
-        renderFooter(footerEl, true);
+        renderFooter(footerEl);
     }
 
     function attemptUnlock() {
-        const p = getActiveProfile();
+        const pkg = getActivePackage();
         const inputEl = document.getElementById("ps-unlock-input");
         const errEl = document.getElementById("ps-unlock-error");
         const rememberEl = document.getElementById("ps-remember-pwd");
         const shouldRemember = rememberEl ? rememberEl.checked : false;
         const hashed = hashPassword(inputEl ? inputEl.value : "");
 
-        if (p.authorPasswordHash && hashed === p.authorPasswordHash) {
-            setProfileAuth(p, true, true, shouldRemember);
+        if (pkg.authorPasswordHash && hashed === pkg.authorPasswordHash) {
+            isUnlocked = true;
+            isAuthorUnlocked = true;
+            if (shouldRemember) {
+                try { localStorage.setItem(getAuthStorageKey(pkg), "author"); } catch (e) {}
+            } else {
+                clearSavedAuth();
+            }
             renderPanelContent();
             return;
         }
 
-        if (p.passwordHash && hashed === p.passwordHash) {
-            setProfileAuth(p, true, false, shouldRemember);
+        if (pkg.passwordHash && hashed === pkg.passwordHash) {
+            isUnlocked = true;
+            isAuthorUnlocked = false;
+            if (shouldRemember) {
+                try { localStorage.setItem(getAuthStorageKey(pkg), "player"); } catch (e) {}
+            } else {
+                clearSavedAuth();
+            }
             renderPanelContent();
             return;
         }
@@ -610,52 +706,53 @@
     }
 
     function renderFateTab(bodyEl) {
-        const p = getActiveProfile();
+        const pkg = getActivePackage();
+        const maxProb = pkg.endings.reduce((m, e) => Math.max(m, e.prob || 0), 0);
 
-        const probsHtml = p.endings.length
-            ? p.endings.map(e => `
-                <div class="ps-prob-item">
-                    <div class="ps-prob-head">
-                        <span>${escapeHtml(e.name)}</span>
-                        <span style="opacity:0.85;font-weight:500;">${e.prob}%</span>
+        const probsHtml = pkg.endings.length
+            ? pkg.endings.map(e => {
+                const isLead = maxProb > 0 && e.prob === maxProb;
+                return `
+                    <div class="ps-prob-item">
+                        <div class="ps-prob-head">
+                            <span>${escapeHtml(e.name)}${isLead ? `<span class="ps-lead-tag">当前领先</span>` : ""}</span>
+                            <span style="opacity:0.85;font-weight:500;">${e.prob}%</span>
+                        </div>
+                        <div class="ps-prob-bar-bg">
+                            <div class="ps-prob-bar-fill" style="width:${e.prob}%;"></div>
+                        </div>
                     </div>
-                    <div class="ps-prob-bar-bg">
-                        <div class="ps-prob-bar-fill" style="width:${e.prob}%;"></div>
-                    </div>
-                </div>
-            `).join("")
+                `;
+            }).join("")
             : `<div class="ps-hint">尚未设置任何结局。</div>`;
 
         bodyEl.innerHTML = `
             <div class="ps-section">
                 <div class="ps-section-header">
-                    <span class="ps-label">当前封包：${escapeHtml(p.storyTitle)}</span>
-                    <button id="ps-reset-probs" class="ps-btn ps-btn-sm">清零重置</button>
+                    <span class="ps-label">当前结局偏向进度（初始 0%，单轮累加）</span>
+                    <button id="ps-reset-probs" class="ps-btn ps-btn-sm">归零重置</button>
                 </div>
                 ${probsHtml}
                 <div class="ps-hint" style="margin-top:12px;">
-                    所有结局初始默认 0%，每轮回复将根据当前对话与已有记忆重新判定各结局占比；切换到其他封包时，当前封包的进度会自动独立保存。
+                    每轮仅给最偏向的 1 个结局加分，终局将自动导向数值最高的结局。切换上方「封包列表」可独立保存不同剧情的进度。
                 </div>
             </div>
         `;
 
         document.getElementById("ps-reset-probs").addEventListener("click", () => {
-            if (!p.endings.length) return;
-            p.endings.forEach(e => {
-                e.prob = 0;
-            });
+            if (!pkg.endings.length) return;
+            pkg.endings.forEach(e => { e.prob = 0; });
             saveSettings();
             renderPanelContent();
         });
     }
 
     function renderEditTab(bodyEl) {
-        const p = getActiveProfile();
-        const auth = getProfileAuth(p);
-        const canEdit = !p.isSealed || auth.isAuthorUnlocked;
+        const pkg = getActivePackage();
+        const canEdit = !pkg.isSealed || isAuthorUnlocked;
         const disabledAttr = canEdit ? "" : "disabled";
 
-        const endingsEditorHtml = p.endings.map((e, idx) => `
+        const endingsEditorHtml = pkg.endings.map((e, idx) => `
             <div class="ps-ending-card">
                 <div class="ps-ending-top">
                     <input type="text" class="ps-input ps-end-name" data-idx="${idx}" value="${escapeHtml(e.name)}" placeholder="结局名称（如：BE · 永夜）" ${disabledAttr} />
@@ -667,7 +764,7 @@
 
         let sealedBannerHtml = "";
         if (!canEdit) {
-            const elevateBox = p.authorPasswordHash
+            const elevateBox = pkg.authorPasswordHash
                 ? `<div class="ps-input-row" style="max-width:100%;margin-top:4px;">
                        <input type="password" id="ps-author-elevate-input" class="ps-input" placeholder="作者本人测试/修改？输入作者密码解除只读..." />
                        <button id="ps-author-elevate-btn" class="ps-btn ps-btn-primary">解锁编辑</button>
@@ -688,10 +785,10 @@
         const passwordSectionHtml = canEdit ? `
             <div class="ps-section">
                 <div class="ps-section-header">
-                    <span class="ps-label">1. 玩家防剧透密码（给玩家查看结局占比用，不可改大纲）</span>
+                    <span class="ps-label">1. 玩家防剧透密码（给玩家查看结局进度用，不可改大纲）</span>
                 </div>
                 <div class="ps-input-row" style="max-width:100%;">
-                    <input type="password" id="ps-new-password" class="ps-input" placeholder="${p.passwordHash ? "已设置玩家密码（输入新密码可覆盖）" : "设置玩家解锁密码..."}" />
+                    <input type="password" id="ps-new-password" class="ps-input" placeholder="${pkg.passwordHash ? "已设置玩家密码（输入新密码可覆盖）" : "设置玩家解锁密码..."}" />
                     <button id="ps-set-password-btn" class="ps-btn">保存玩家密码</button>
                 </div>
             </div>
@@ -700,7 +797,7 @@
                     <span class="ps-label">2. 作者管理密码（仅作者本人保留，封印后也可解锁编辑）</span>
                 </div>
                 <div class="ps-input-row" style="max-width:100%;">
-                    <input type="password" id="ps-new-author-password" class="ps-input" placeholder="${p.authorPasswordHash ? "已设置作者密码（输入新密码可覆盖）" : "设置作者管理密码..."}" />
+                    <input type="password" id="ps-new-author-password" class="ps-input" placeholder="${pkg.authorPasswordHash ? "已设置作者密码（输入新密码可覆盖）" : "设置作者管理密码..."}" />
                     <button id="ps-set-author-password-btn" class="ps-btn">保存作者密码</button>
                 </div>
                 <div class="ps-hint">建议两个密码设成不一样的：发给玩家“玩家密码”，自己留着“作者密码”方便随时测试和修改大纲。</div>
@@ -713,17 +810,17 @@
                 <div class="ps-section-header">
                     <span class="ps-label">剧情线名称</span>
                 </div>
-                <input type="text" id="ps-story-title" class="ps-input" value="${escapeHtml(p.storyTitle)}" placeholder="输入剧情线名称..." ${disabledAttr} />
+                <input type="text" id="ps-story-title" class="ps-input" value="${escapeHtml(pkg.storyTitle)}" placeholder="输入剧情线名称..." ${disabledAttr} />
             </div>
             <div class="ps-section">
                 <div class="ps-section-header">
                     <span class="ps-label">主线剧情大纲（随每次聊天发送给 AI）</span>
                 </div>
-                <textarea id="ps-plotline" class="ps-textarea" placeholder="输入核心世界观、主线脉络、关键转折点..." ${disabledAttr}>${escapeHtml(p.plotline)}</textarea>
+                <textarea id="ps-plotline" class="ps-textarea" placeholder="输入核心世界观、主线脉络、关键转折点..." ${disabledAttr}>${escapeHtml(pkg.plotline)}</textarea>
             </div>
             <div class="ps-section">
                 <div class="ps-section-header">
-                    <span class="ps-label">结局分支设定（共 ${p.endings.length} 个，默认均从 0% 起步）</span>
+                    <span class="ps-label">结局分支设定（共 ${pkg.endings.length} 个）</span>
                     ${canEdit ? `<button id="ps-add-ending" class="ps-btn ps-btn-sm">+ 添加结局</button>` : ""}
                 </div>
                 <div id="ps-endings-list">${endingsEditorHtml}</div>
@@ -731,12 +828,13 @@
             ${passwordSectionHtml}
         `;
 
-        if (!canEdit && p.authorPasswordHash) {
+        if (!canEdit && pkg.authorPasswordHash) {
             const tryElevate = () => {
                 const input = document.getElementById("ps-author-elevate-input");
                 const err = document.getElementById("ps-author-elevate-err");
-                if (hashPassword(input ? input.value : "") === p.authorPasswordHash) {
-                    setProfileAuth(p, true, true, true);
+                if (hashPassword(input ? input.value : "") === pkg.authorPasswordHash) {
+                    isAuthorUnlocked = true;
+                    try { localStorage.setItem(getAuthStorageKey(pkg), "author"); } catch (e) {}
                     renderPanelContent();
                 } else if (err) {
                     err.textContent = "作者密码错误。";
@@ -750,37 +848,39 @@
 
         if (canEdit) {
             document.getElementById("ps-story-title").addEventListener("input", (e) => {
-                p.storyTitle = e.target.value;
+                pkg.storyTitle = e.target.value;
+                const nameEl = document.querySelector(".ps-pkg-current-name");
+                if (nameEl) nameEl.textContent = pkg.storyTitle || "未命名剧情线";
                 saveSettings();
             });
             document.getElementById("ps-plotline").addEventListener("input", (e) => {
-                p.plotline = e.target.value;
+                pkg.plotline = e.target.value;
                 saveSettings();
             });
 
             bodyEl.querySelectorAll(".ps-end-name").forEach(inp => {
                 inp.addEventListener("input", () => {
-                    p.endings[Number(inp.getAttribute("data-idx"))].name = inp.value;
+                    pkg.endings[Number(inp.getAttribute("data-idx"))].name = inp.value;
                     saveSettings();
                 });
             });
 
             bodyEl.querySelectorAll(".ps-end-desc").forEach(ta => {
                 ta.addEventListener("input", () => {
-                    p.endings[Number(ta.getAttribute("data-idx"))].desc = ta.value;
+                    pkg.endings[Number(ta.getAttribute("data-idx"))].desc = ta.value;
                     saveSettings();
                 });
             });
 
             document.getElementById("ps-add-ending").addEventListener("click", () => {
-                p.endings.push({ id: "end_" + Date.now(), name: `结局 ${p.endings.length + 1}`, desc: "", prob: 0 });
+                pkg.endings.push({ id: "end_" + Date.now(), name: `结局 ${pkg.endings.length + 1}`, desc: "", prob: 0 });
                 saveSettings();
                 renderPanelContent();
             });
 
             bodyEl.querySelectorAll(".ps-del-ending").forEach(btn => {
                 btn.addEventListener("click", () => {
-                    p.endings.splice(Number(btn.getAttribute("data-idx")), 1);
+                    pkg.endings.splice(Number(btn.getAttribute("data-idx")), 1);
                     saveSettings();
                     renderPanelContent();
                 });
@@ -791,17 +891,16 @@
                 const pwd = inp ? inp.value.trim() : "";
                 if (!pwd) {
                     if (confirm("密码为空将清除玩家防剧透密码，确定吗？")) {
-                        clearProfileAuth(p);
-                        p.passwordHash = "";
+                        clearSavedAuth();
+                        pkg.passwordHash = "";
                         saveSettings();
                         alert("已清除玩家密码。");
                         renderPanelContent();
                     }
                     return;
                 }
-                clearProfileAuth(p);
-                p.passwordHash = hashPassword(pwd);
-                setProfileAuth(p, true, true, true);
+                clearSavedAuth();
+                pkg.passwordHash = hashPassword(pwd);
                 saveSettings();
                 if (inp) inp.value = "";
                 alert("玩家防剧透密码已保存！");
@@ -813,17 +912,16 @@
                 const pwd = inp ? inp.value.trim() : "";
                 if (!pwd) {
                     if (confirm("密码为空将清除作者管理密码，确定吗？")) {
-                        clearProfileAuth(p);
-                        p.authorPasswordHash = "";
+                        clearSavedAuth();
+                        pkg.authorPasswordHash = "";
                         saveSettings();
                         alert("已清除作者密码。");
                         renderPanelContent();
                     }
                     return;
                 }
-                clearProfileAuth(p);
-                p.authorPasswordHash = hashPassword(pwd);
-                setProfileAuth(p, true, true, true);
+                clearSavedAuth();
+                pkg.authorPasswordHash = hashPassword(pwd);
                 saveSettings();
                 if (inp) inp.value = "";
                 alert("作者管理密码已保存！封印导出后凭此密码可随时解除只读编辑。");
@@ -832,113 +930,23 @@
         }
     }
 
-    /* =========================================
-       已导入 / 已存剧情封包列表（多存档自由切换）
-       ========================================= */
-    function renderLibraryTab(bodyEl) {
-        const store = getStore();
-        const activeId = store.activeProfileId;
-
-        const listHtml = store.profiles.map(item => {
-            const isActive = item.id === activeId;
-            const probsSummary = item.endings.map(e => `${escapeHtml(e.name)} ${e.prob}%`).join(" · ");
-            const lockBadge = (item.passwordHash || item.authorPasswordHash) ? "🔒" : "🔓";
-            const typeBadge = item.isSealed ? "封印包" : "草稿/自建";
-
-            return `
-                <div class="ps-pkg-card ${isActive ? "ps-pkg-active" : ""}">
-                    <div class="ps-pkg-info">
-                        <div class="ps-pkg-title">
-                            <span>${lockBadge} ${escapeHtml(item.storyTitle || "未命名剧情线")}</span>
-                            <span class="ps-badge ${item.isSealed ? "ps-sealed" : ""}">${typeBadge}</span>
-                            ${isActive ? `<span class="ps-badge" style="background:rgba(16,185,129,0.22);color:#a7f3d0;border-color:rgba(110,231,183,0.4);">当前启用</span>` : ""}
-                        </div>
-                        <div class="ps-pkg-meta">
-                            进度存档：${probsSummary || "暂无结局"}
-                        </div>
-                    </div>
-                    <div class="ps-pkg-actions">
-                        ${!isActive ? `<button class="ps-btn ps-btn-primary ps-btn-sm ps-switch-pkg" data-id="${escapeHtml(item.id)}">切换使用</button>` : ""}
-                        <button class="ps-btn ps-btn-danger ps-btn-sm ps-del-pkg" data-id="${escapeHtml(item.id)}">删除</button>
-                    </div>
-                </div>
-            `;
-        }).join("");
-
-        bodyEl.innerHTML = `
-            <div class="ps-section">
-                <div class="ps-section-header">
-                    <span class="ps-label">已存剧情封包列表（独立保存各自进度）</span>
-                    <button id="ps-new-blank-pkg" class="ps-btn ps-btn-sm">+ 新建空白线</button>
-                </div>
-                ${listHtml}
-                <div class="ps-hint">
-                    导入新封包时会自动加入此列表并保留旧封包进度；随时点击「切换使用」即可切回任意一条剧情线继续游玩。
-                </div>
-            </div>
-        `;
-
-        document.getElementById("ps-new-blank-pkg").addEventListener("click", () => {
-            const blank = createBlankProfile(`新剧情线 #${store.profiles.length + 1}`);
-            store.profiles.unshift(blank);
-            store.activeProfileId = blank.id;
-            activeTab = "edit";
-            saveSettings();
-            renderPanelContent();
-        });
-
-        bodyEl.querySelectorAll(".ps-switch-pkg").forEach(btn => {
-            btn.addEventListener("click", () => {
-                const targetId = btn.getAttribute("data-id");
-                if (store.profiles.some(item => item.id === targetId)) {
-                    store.activeProfileId = targetId;
-                    activeTab = "fate";
-                    saveSettings();
-                    renderPanelContent();
-                }
-            });
-        });
-
-        bodyEl.querySelectorAll(".ps-del-pkg").forEach(btn => {
-            btn.addEventListener("click", () => {
-                const targetId = btn.getAttribute("data-id");
-                const target = store.profiles.find(item => item.id === targetId);
-                if (!target) return;
-                if (!confirm(`确定要删除封包「${target.storyTitle}」及其进度存档吗？`)) return;
-
-                clearProfileAuth(target);
-                store.profiles = store.profiles.filter(item => item.id !== targetId);
-                if (store.profiles.length === 0) {
-                    const blank = createBlankProfile();
-                    store.profiles.push(blank);
-                }
-                if (store.activeProfileId === targetId) {
-                    store.activeProfileId = store.profiles[0].id;
-                }
-                saveSettings();
-                renderPanelContent();
-            });
-        });
-    }
-
-    function renderFooter(footerEl, isUnlockedState) {
-        const p = getActiveProfile();
-        const auth = getProfileAuth(p);
-        const canEdit = !p.isSealed || auth.isAuthorUnlocked;
-        const hasAnyPassword = Boolean(p.passwordHash || p.authorPasswordHash);
+    function renderFooter(footerEl) {
+        const pkg = getActivePackage();
+        const canEdit = !pkg.isSealed || isAuthorUnlocked;
+        const hasAnyPassword = Boolean(pkg.passwordHash || pkg.authorPasswordHash);
 
         footerEl.innerHTML = `
             <div class="ps-footer-group">
-                ${(isUnlockedState && hasAnyPassword) ? `<button id="ps-lock-now" class="ps-btn ps-btn-sm">立即锁定</button>` : ""}
+                ${hasAnyPassword ? `<button id="ps-lock-now" class="ps-btn ps-btn-sm">立即锁定</button>` : ""}
                 <label class="ps-btn ps-btn-sm" style="cursor:pointer;">
-                    + 导入新封包
+                    导入新封包
                     <input type="file" id="ps-import-file" accept=".json" style="display:none;" />
                 </label>
             </div>
             <div class="ps-footer-group">
-                ${(isUnlockedState && canEdit)
+                ${canEdit
                     ? `<button id="ps-export-sealed" class="ps-btn ps-btn-primary ps-btn-sm">导出加密封包</button>`
-                    : `<span class="ps-hint" style="margin:0;">旧封包进度已自动存档</span>`
+                    : `<button id="ps-new-from-footer" class="ps-btn ps-btn-sm">+ 新建空白线</button>`
                 }
             </div>
         `;
@@ -946,7 +954,9 @@
         const lockBtn = document.getElementById("ps-lock-now");
         if (lockBtn) {
             lockBtn.addEventListener("click", () => {
-                clearProfileAuth(p);
+                clearSavedAuth();
+                isUnlocked = false;
+                isAuthorUnlocked = false;
                 renderPanelContent();
             });
         }
@@ -956,25 +966,40 @@
         const exportBtn = document.getElementById("ps-export-sealed");
         if (exportBtn) {
             exportBtn.addEventListener("click", () => {
-                if (!p.passwordHash && !p.authorPasswordHash) {
+                if (!pkg.passwordHash && !pkg.authorPasswordHash) {
                     if (!confirm("你还没有设置任何密码，确定要导出无密码封包吗？")) return;
                 }
-                const pkg = {
+                const out = {
                     version: "1.3",
                     isSealed: true,
-                    storyTitle: p.storyTitle,
-                    plotline: p.plotline,
-                    endings: p.endings.map(e => ({ ...e, prob: 0 })),
-                    passwordHash: p.passwordHash,
-                    authorPasswordHash: p.authorPasswordHash
+                    storyTitle: pkg.storyTitle,
+                    plotline: pkg.plotline,
+                    endings: pkg.endings.map(e => ({ ...e, prob: 0 })),
+                    passwordHash: pkg.passwordHash,
+                    authorPasswordHash: pkg.authorPasswordHash
                 };
-                const blob = new Blob([JSON.stringify(pkg, null, 2)], { type: "application/json" });
+                const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement("a");
                 a.href = url;
-                a.download = `${p.storyTitle || "plot"}_sealed.json`;
+                a.download = `${pkg.storyTitle || "plot"}_sealed.json`;
                 a.click();
                 URL.revokeObjectURL(url);
+            });
+        }
+
+        const newBtn = document.getElementById("ps-new-from-footer");
+        if (newBtn) {
+            newBtn.addEventListener("click", () => {
+                const root = getRootSettings();
+                const blank = createBlankPackage(`新剧情线 ${root.packages.length + 1}`);
+                root.packages.push(blank);
+                root.activePackageId = blank.id;
+                activeTab = "edit";
+                isUnlocked = true;
+                isAuthorUnlocked = true;
+                saveSettings();
+                renderPanelContent();
             });
         }
     }
@@ -985,41 +1010,39 @@
         const reader = new FileReader();
         reader.onload = (evt) => {
             try {
-                const pkg = JSON.parse(evt.target.result);
-                if (!pkg.endings || typeof pkg.plotline !== "string") {
+                const parsed = JSON.parse(evt.target.result);
+                if (!parsed.endings || typeof parsed.plotline !== "string") {
                     alert("无效的剧情封包文件。");
                     return;
                 }
-                const store = getStore();
-                const importedProfile = {
-                    id: "pkg_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
-                    storyTitle: pkg.storyTitle || "导入的剧情线",
-                    plotline: pkg.plotline,
-                    endings: pkg.endings.map(item => ({
-                        id: item.id || ("end_" + Date.now()),
-                        name: item.name || "未命名结局",
-                        desc: item.desc || "",
+                const root = getRootSettings();
+                const newPkg = {
+                    id: "pkg_" + Date.now() + "_" + Math.floor(Math.random() * 1000),
+                    storyTitle: parsed.storyTitle || "导入的剧情线",
+                    plotline: parsed.plotline,
+                    endings: parsed.endings.map(end => ({
+                        id: end.id || ("end_" + Date.now() + "_" + Math.floor(Math.random() * 1000)),
+                        name: end.name || "未命名结局",
+                        desc: end.desc || "",
                         prob: 0
                     })),
-                    passwordHash: pkg.passwordHash || "",
-                    authorPasswordHash: pkg.authorPasswordHash || "",
-                    isSealed: true,
-                    updatedAt: Date.now()
+                    passwordHash: parsed.passwordHash || "",
+                    authorPasswordHash: parsed.authorPasswordHash || "",
+                    isSealed: true
                 };
-
-                // 不覆盖旧封包，直接新增一条存档并切换过去
-                store.profiles.unshift(importedProfile);
-                store.activeProfileId = importedProfile.id;
+                root.packages.push(newPkg);
+                root.activePackageId = newPkg.id;
+                pkgDrawerOpen = false;
                 activeTab = "fate";
+                restoreSavedAuth();
                 saveSettings();
                 renderPanelContent();
-                alert(`封包「${importedProfile.storyTitle}」已导入并加入封包列表！旧封包的进度已完整保留。`);
+                alert(`剧情封包「${newPkg.storyTitle}」已添加到存档列表（旧封包进度已保留）！`);
             } catch (err) {
                 alert("读取封包失败，请检查 JSON 格式。");
             }
         };
         reader.readAsText(file);
-        e.target.value = "";
     }
 
     /* =========================================
@@ -1040,6 +1063,7 @@
     }
 
     function start() {
+        restoreSavedAuth();
         initUI();
         bindSillyTavernEvents();
     }
