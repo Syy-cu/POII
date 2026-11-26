@@ -228,7 +228,10 @@
                             <span class="ps-title">PLOT STEERING</span>
                             <span id="ps-mode-badge" class="ps-badge">作者模式</span>
                         </div>
-                        <button class="ps-close-btn" id="ps-close-btn">×</button>
+                        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+                            <button id="ps-header-toggle" class="ps-btn ps-btn-sm" title="一键开启 / 暂停剧情掰正">● 已开启</button>
+                            <button class="ps-close-btn" id="ps-close-btn">×</button>
+                        </div>
                     </div>
                     <div id="ps-tabs-container"></div>
                     <div class="ps-body" id="ps-body"></div>
@@ -239,10 +242,18 @@
         document.body.insertAdjacentHTML("beforeend", modalHtml);
 
         const triggerEl = document.getElementById("ps-floating-trigger");
+        const headerToggleBtn = document.getElementById("ps-header-toggle");
         const closeBtn = document.getElementById("ps-close-btn");
         const overlayEl = document.getElementById("ps-modal-overlay");
 
         makeDraggable(triggerEl, toggleModal);
+
+        headerToggleBtn.addEventListener("click", () => {
+            const s = getSettings();
+            s.enabled = !s.enabled;
+            saveSettings();
+            renderPanelContent();
+        });
 
         closeBtn.addEventListener("click", closeModal);
         overlayEl.addEventListener("click", (e) => {
@@ -274,7 +285,6 @@
 
         const onMove = (e) => {
             if (!isDragging) return;
-            // 面板打开处于邻居停靠状态时，禁止拖拽，确保轻点一下必定关闭
             if (document.body.classList.contains("ps-modal-active")) return;
 
             const point = e.touches ? e.touches[0] : e;
@@ -334,6 +344,22 @@
     /* =========================================
        面板渲染
        ========================================= */
+    function updateHeaderToggleUI(enabled) {
+        const btn = document.getElementById("ps-header-toggle");
+        if (!btn) return;
+        if (enabled) {
+            btn.textContent = "● 已开启";
+            btn.style.background = "rgba(16, 185, 129, 0.2)";
+            btn.style.borderColor = "rgba(110, 231, 183, 0.45)";
+            btn.style.color = "#a7f3d0";
+        } else {
+            btn.textContent = "○ 已暂停";
+            btn.style.background = "rgba(255, 255, 255, 0.06)";
+            btn.style.borderColor = "rgba(255, 255, 255, 0.16)";
+            btn.style.color = "rgba(255, 255, 255, 0.55)";
+        }
+    }
+
     function renderPanelContent() {
         const s = getSettings();
         const canEdit = !s.isSealed || isAuthorUnlocked;
@@ -341,6 +367,8 @@
         const tabsEl = document.getElementById("ps-tabs-container");
         const bodyEl = document.getElementById("ps-body");
         const footerEl = document.getElementById("ps-footer");
+
+        updateHeaderToggleUI(s.enabled);
 
         if (s.isSealed) {
             badgeEl.textContent = isAuthorUnlocked ? "已封印 · 作者已提权" : "已封印 · 防剧透包";
@@ -382,7 +410,7 @@
                     </label>
                 </div>
                 <div class="ps-footer-group">
-                    <span class="ps-hint" style="margin:0;">状态：${s.enabled ? "后台掰正运行中" : "已暂停"}</span>
+                    <span class="ps-hint" style="margin:0;">右上角可随时一键开关</span>
                 </div>
             `;
 
@@ -456,381 +484,4 @@
         const s = getSettings();
 
         const probsHtml = s.endings.length
-            ? s.endings.map(e => `
-                <div class="ps-prob-item">
-                    <div class="ps-prob-head">
-                        <span>${escapeHtml(e.name)}</span>
-                        <span style="opacity:0.85;font-weight:500;">${e.prob}%</span>
-                    </div>
-                    <div class="ps-prob-bar-bg">
-                        <div class="ps-prob-bar-fill" style="width:${e.prob}%;"></div>
-                    </div>
-                </div>
-            `).join("")
-            : `<div class="ps-hint">尚未设置任何结局。</div>`;
-
-        bodyEl.innerHTML = `
-            <div class="ps-section">
-                <div class="ps-section-header">
-                    <span class="ps-label">当前结局偏向百分比</span>
-                    <button id="ps-reset-probs" class="ps-btn ps-btn-sm">均分重置</button>
-                </div>
-                ${probsHtml}
-                <div class="ps-hint" style="margin-top:12px;">
-                    每轮回复将根据当前对话与已有记忆重新判定各结局占比；若玩家修改了记忆或设定，后续轮次会自动按新事实重新计算。
-                </div>
-            </div>
-        `;
-
-        document.getElementById("ps-reset-probs").addEventListener("click", () => {
-            if (!s.endings.length) return;
-            const avg = Math.round(100 / s.endings.length);
-            s.endings.forEach((e, idx) => {
-                e.prob = idx === 0 ? 100 - avg * (s.endings.length - 1) : avg;
-            });
-            saveSettings();
-            renderPanelContent();
-        });
-    }
-
-    function renderEditTab(bodyEl) {
-        const s = getSettings();
-        const canEdit = !s.isSealed || isAuthorUnlocked;
-        const disabledAttr = canEdit ? "" : "disabled";
-
-        const endingsEditorHtml = s.endings.map((e, idx) => `
-            <div class="ps-ending-card">
-                <div class="ps-ending-top">
-                    <input type="text" class="ps-input ps-end-name" data-idx="${idx}" value="${escapeHtml(e.name)}" placeholder="结局名称（如：BE · 永夜）" ${disabledAttr} />
-                    ${canEdit ? `<button class="ps-btn ps-btn-danger ps-btn-sm ps-del-ending" data-idx="${idx}">删除</button>` : ""}
-                </div>
-                <textarea class="ps-textarea ps-end-desc" data-idx="${idx}" placeholder="触发条件、剧情走向与终局大纲..." style="min-height:58px;" ${disabledAttr}>${escapeHtml(e.desc)}</textarea>
-            </div>
-        `).join("");
-
-        let sealedBannerHtml = "";
-        if (!canEdit) {
-            const elevateBox = s.authorPasswordHash
-                ? `<div class="ps-input-row" style="max-width:100%;margin-top:4px;">
-                       <input type="password" id="ps-author-elevate-input" class="ps-input" placeholder="作者本人测试/修改？输入作者密码解除只读..." />
-                       <button id="ps-author-elevate-btn" class="ps-btn ps-btn-primary">解锁编辑</button>
-                   </div>
-                   <div id="ps-author-elevate-err" style="color:#ff8a8a;font-size:11.5px;"></div>`
-                : `<div class="ps-hint" style="margin:0;">（该封包导出时未设置作者管理密码，无法提权编辑）</div>`;
-
-            sealedBannerHtml = `
-                <div class="ps-ending-card" style="border-color:rgba(255,215,130,0.3);margin-bottom:16px;">
-                    <div class="ps-hint" style="margin:0;color:rgba(255,226,165,0.9);">
-                        此剧情线为作者封印包（只读模式），防止玩家误改设定。
-                    </div>
-                    ${elevateBox}
-                </div>
-            `;
-        }
-
-        const passwordSectionHtml = canEdit ? `
-            <div class="ps-section">
-                <div class="ps-section-header">
-                    <span class="ps-label">1. 玩家防剧透密码（给玩家查看结局占比用，不可改大纲）</span>
-                </div>
-                <div class="ps-input-row" style="max-width:100%;">
-                    <input type="password" id="ps-new-password" class="ps-input" placeholder="${s.passwordHash ? "已设置玩家密码（输入新密码可覆盖）" : "设置玩家解锁密码..."}" />
-                    <button id="ps-set-password-btn" class="ps-btn">保存玩家密码</button>
-                </div>
-            </div>
-            <div class="ps-section">
-                <div class="ps-section-header">
-                    <span class="ps-label">2. 作者管理密码（仅作者本人保留，封印后也可解锁编辑）</span>
-                </div>
-                <div class="ps-input-row" style="max-width:100%;">
-                    <input type="password" id="ps-new-author-password" class="ps-input" placeholder="${s.authorPasswordHash ? "已设置作者密码（输入新密码可覆盖）" : "设置作者管理密码..."}" />
-                    <button id="ps-set-author-password-btn" class="ps-btn">保存作者密码</button>
-                </div>
-                <div class="ps-hint">建议两个密码设成不一样的：发给玩家“玩家密码”，自己留着“作者密码”方便随时测试和修改大纲。</div>
-            </div>
-        ` : "";
-
-        bodyEl.innerHTML = `
-            ${sealedBannerHtml}
-            <div class="ps-section">
-                <div class="ps-section-header">
-                    <span class="ps-label">剧情线名称</span>
-                </div>
-                <input type="text" id="ps-story-title" class="ps-input" value="${escapeHtml(s.storyTitle)}" placeholder="输入剧情线名称..." ${disabledAttr} />
-            </div>
-            <div class="ps-section">
-                <div class="ps-section-header">
-                    <span class="ps-label">主线剧情大纲（随每次聊天发送给 AI）</span>
-                </div>
-                <textarea id="ps-plotline" class="ps-textarea" placeholder="输入核心世界观、主线脉络、关键转折点..." ${disabledAttr}>${escapeHtml(s.plotline)}</textarea>
-            </div>
-            <div class="ps-section">
-                <div class="ps-section-header">
-                    <span class="ps-label">结局分支设定（共 ${s.endings.length} 个）</span>
-                    ${canEdit ? `<button id="ps-add-ending" class="ps-btn ps-btn-sm">+ 添加结局</button>` : ""}
-                </div>
-                <div id="ps-endings-list">${endingsEditorHtml}</div>
-            </div>
-            ${passwordSectionHtml}
-        `;
-
-        if (!canEdit && s.authorPasswordHash) {
-            const tryElevate = () => {
-                const input = document.getElementById("ps-author-elevate-input");
-                const err = document.getElementById("ps-author-elevate-err");
-                if (hashPassword(input ? input.value : "") === s.authorPasswordHash) {
-                    isAuthorUnlocked = true;
-                    try { localStorage.setItem(getAuthStorageKey(s), "author"); } catch (e) {}
-                    renderPanelContent();
-                } else if (err) {
-                    err.textContent = "作者密码错误。";
-                }
-            };
-            document.getElementById("ps-author-elevate-btn").addEventListener("click", tryElevate);
-            document.getElementById("ps-author-elevate-input").addEventListener("keydown", (e) => {
-                if (e.key === "Enter") tryElevate();
-            });
-        }
-
-        if (canEdit) {
-            document.getElementById("ps-story-title").addEventListener("input", (e) => {
-                s.storyTitle = e.target.value;
-                saveSettings();
-            });
-            document.getElementById("ps-plotline").addEventListener("input", (e) => {
-                s.plotline = e.target.value;
-                saveSettings();
-            });
-
-            bodyEl.querySelectorAll(".ps-end-name").forEach(inp => {
-                inp.addEventListener("input", () => {
-                    s.endings[Number(inp.getAttribute("data-idx"))].name = inp.value;
-                    saveSettings();
-                });
-            });
-
-            bodyEl.querySelectorAll(".ps-end-desc").forEach(ta => {
-                ta.addEventListener("input", () => {
-                    s.endings[Number(ta.getAttribute("data-idx"))].desc = ta.value;
-                    saveSettings();
-                });
-            });
-
-            document.getElementById("ps-add-ending").addEventListener("click", () => {
-                s.endings.push({ id: "end_" + Date.now(), name: `结局 ${s.endings.length + 1}`, desc: "", prob: 0 });
-                saveSettings();
-                renderPanelContent();
-            });
-
-            bodyEl.querySelectorAll(".ps-del-ending").forEach(btn => {
-                btn.addEventListener("click", () => {
-                    s.endings.splice(Number(btn.getAttribute("data-idx")), 1);
-                    saveSettings();
-                    renderPanelContent();
-                });
-            });
-
-            document.getElementById("ps-set-password-btn").addEventListener("click", () => {
-                const inp = document.getElementById("ps-new-password");
-                const pwd = inp ? inp.value.trim() : "";
-                if (!pwd) {
-                    if (confirm("密码为空将清除玩家防剧透密码，确定吗？")) {
-                        clearSavedAuth();
-                        s.passwordHash = "";
-                        saveSettings();
-                        alert("已清除玩家密码。");
-                        renderPanelContent();
-                    }
-                    return;
-                }
-                clearSavedAuth();
-                s.passwordHash = hashPassword(pwd);
-                saveSettings();
-                if (inp) inp.value = "";
-                alert("玩家防剧透密码已保存！");
-                renderPanelContent();
-            });
-
-            document.getElementById("ps-set-author-password-btn").addEventListener("click", () => {
-                const inp = document.getElementById("ps-new-author-password");
-                const pwd = inp ? inp.value.trim() : "";
-                if (!pwd) {
-                    if (confirm("密码为空将清除作者管理密码，确定吗？")) {
-                        clearSavedAuth();
-                        s.authorPasswordHash = "";
-                        saveSettings();
-                        alert("已清除作者密码。");
-                        renderPanelContent();
-                    }
-                    return;
-                }
-                clearSavedAuth();
-                s.authorPasswordHash = hashPassword(pwd);
-                saveSettings();
-                if (inp) inp.value = "";
-                alert("作者管理密码已保存！封印导出后凭此密码可随时解除只读编辑。");
-                renderPanelContent();
-            });
-        }
-    }
-
-    function renderFooter(footerEl) {
-        const s = getSettings();
-        const canEdit = !s.isSealed || isAuthorUnlocked;
-        const hasAnyPassword = Boolean(s.passwordHash || s.authorPasswordHash);
-
-        footerEl.innerHTML = `
-            <div class="ps-footer-group">
-                <button id="ps-toggle-enable" class="ps-btn ps-btn-sm">
-                    ${s.enabled ? "● 掰正已开启" : "○ 掰正已暂停"}
-                </button>
-                ${hasAnyPassword ? `<button id="ps-lock-now" class="ps-btn ps-btn-sm">立即锁定</button>` : ""}
-            </div>
-            <div class="ps-footer-group">
-                <label class="ps-btn ps-btn-sm" style="cursor:pointer;">
-                    导入封包
-                    <input type="file" id="ps-import-file" accept=".json" style="display:none;" />
-                </label>
-                ${canEdit
-                    ? `<button id="ps-export-sealed" class="ps-btn ps-btn-primary ps-btn-sm">导出加密封包</button>`
-                    : `<button id="ps-reset-author" class="ps-btn ps-btn-danger ps-btn-sm">新建空白线</button>`
-                }
-            </div>
-        `;
-
-        document.getElementById("ps-toggle-enable").addEventListener("click", () => {
-            s.enabled = !s.enabled;
-            saveSettings();
-            renderPanelContent();
-        });
-
-        const lockBtn = document.getElementById("ps-lock-now");
-        if (lockBtn) {
-            lockBtn.addEventListener("click", () => {
-                clearSavedAuth();
-                isUnlocked = false;
-                isAuthorUnlocked = false;
-                renderPanelContent();
-            });
-        }
-
-        document.getElementById("ps-import-file").addEventListener("change", handleImportPackage);
-
-        const exportBtn = document.getElementById("ps-export-sealed");
-        if (exportBtn) {
-            exportBtn.addEventListener("click", () => {
-                if (!s.passwordHash && !s.authorPasswordHash) {
-                    if (!confirm("你还没有设置任何密码，确定要导出无密码封包吗？")) return;
-                }
-                const pkg = {
-                    version: "1.2",
-                    isSealed: true,
-                    storyTitle: s.storyTitle,
-                    plotline: s.plotline,
-                    endings: s.endings.map(e => ({ ...e, prob: Math.round(100 / Math.max(1, s.endings.length)) })),
-                    passwordHash: s.passwordHash,
-                    authorPasswordHash: s.authorPasswordHash
-                };
-                const blob = new Blob([JSON.stringify(pkg, null, 2)], { type: "application/json" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `${s.storyTitle || "plot"}_sealed.json`;
-                a.click();
-                URL.revokeObjectURL(url);
-            });
-        }
-
-        const resetBtn = document.getElementById("ps-reset-author");
-        if (resetBtn) {
-            resetBtn.addEventListener("click", () => {
-                if (!confirm("将清空当前封印包并回到空白作者模式，确定吗？")) return;
-                clearSavedAuth();
-                const ctx = getContextSafe();
-                if (ctx.extensionSettings) {
-                    ctx.extensionSettings[MODULE_NAME] = JSON.parse(JSON.stringify(defaultState));
-                }
-                isUnlocked = true;
-                isAuthorUnlocked = true;
-                saveSettings();
-                renderPanelContent();
-            });
-        }
-    }
-
-    function handleImportPackage(e) {
-        const file = e.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (evt) => {
-            try {
-                const pkg = JSON.parse(evt.target.result);
-                if (!pkg.endings || typeof pkg.plotline !== "string") {
-                    alert("无效的剧情封包文件。");
-                    return;
-                }
-                const ctx = getContextSafe();
-                if (ctx.extensionSettings) {
-                    ctx.extensionSettings[MODULE_NAME] = {
-                        enabled: true,
-                        storyTitle: pkg.storyTitle || "导入的剧情线",
-                        plotline: pkg.plotline,
-                        endings: pkg.endings,
-                        passwordHash: pkg.passwordHash || "",
-                        authorPasswordHash: pkg.authorPasswordHash || "",
-                        isSealed: true
-                    };
-                }
-                isUnlocked = !pkg.passwordHash && !pkg.authorPasswordHash;
-                isAuthorUnlocked = false;
-                saveSettings();
-                renderPanelContent();
-                alert("剧情封包导入成功！已自动锁定防剧透。");
-            } catch (err) {
-                alert("读取封包失败，请检查 JSON 格式。");
-            }
-        };
-        reader.readAsText(file);
-    }
-
-    /* =========================================
-       可靠启动：监听消息接收、重说切换、编辑与切聊天
-       ========================================= */
-    function bindSillyTavernEvents() {
-        if (eventsBound) return;
-        const ctx = getContextSafe();
-        if (ctx.eventSource && ctx.event_types) {
-            const ev = ctx.event_types;
-            if (ev.MESSAGE_RECEIVED) ctx.eventSource.on(ev.MESSAGE_RECEIVED, syncProbsFromCurrentMessage);
-            if (ev.MESSAGE_SWIPED) ctx.eventSource.on(ev.MESSAGE_SWIPED, () => syncProbsFromCurrentMessage());
-            if (ev.MESSAGE_EDITED) ctx.eventSource.on(ev.MESSAGE_EDITED, () => syncProbsFromCurrentMessage());
-            if (ev.CHAT_CHANGED) ctx.eventSource.on(ev.CHAT_CHANGED, injectPlotPrompt);
-            eventsBound = true;
-            injectPlotPrompt();
-        }
-    }
-
-    function start() {
-        restoreSavedAuth();
-        initUI();
-        bindSillyTavernEvents();
-    }
-
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", start);
-    } else {
-        start();
-    }
-
-    window.addEventListener("load", start);
-
-    let retries = 0;
-    const timer = setInterval(() => {
-        retries++;
-        const uiReady = initUI();
-        bindSillyTavernEvents();
-        if ((uiReady && eventsBound) || retries >= 15) {
-            clearInterval(timer);
-        }
-    }, 600);
-})();
+            ? s.endings
